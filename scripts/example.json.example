@@ -1,0 +1,6 @@
+{
+    "poll_type": "example",
+    "discord_guild_id": "",
+    "discord_admin_role_id": "",
+    "dashboard_command": "dashboard_example"
+} 
