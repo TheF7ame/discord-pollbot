@@ -1,0 +1,30 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/YOUR_IMAGE_NAME:latest', '.']
+  
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/YOUR_IMAGE_NAME:latest']
+  
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+    - 'run'
+    - 'deploy'
+    - 'YOUR_IMAGE_NAME'
+    - '--image=gcr.io/$PROJECT_ID/YOUR_IMAGE_NAME:latest'
+    - '--region=YOUR_CLOUD_RUN_REGION'
+    - '--platform=managed'
+    - '--no-allow-unauthenticated'
+    - '--min-instances=1'
+    - '--max-instances=10'
+    - '--memory=512Mi'
+    - '--cpu=1'
+    - '--set-secrets=DISCORD_TOKEN=DISCORD_TOKEN:latest,DISCORD_APPLICATION_ID=DISCORD_APPLICATION_ID:latest,DATABASE_URL=DATABASE_URL:latest'
+    - '--set-env-vars=GCP_PROJECT_ID=$PROJECT_ID,GCP_STORAGE_BUCKET=$PROJECT_ID-poll-configs,USE_CLOUD_STORAGE=true'
+    - '--add-cloudsql-instances=$PROJECT_ID:YOUR_CLOUD_SQL_REGION:YOUR_CLOUD_SQL_INSTANCE_NAME'
+
+images:
+  - 'gcr.io/$PROJECT_ID/discord-poll-bot:latest' 

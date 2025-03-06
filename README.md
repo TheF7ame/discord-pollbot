@@ -1,202 +1,312 @@
-# Discord Poll Bot
+# Discord Poll Bot Deployment Guide
 
-A multi-server, multi-poll Discord bot for creating and managing various types of polls across different Discord servers.
+## 1. Install Google Cloud SDK
 
-## Overview
+```bash
+# macOS
+brew install --cask google-cloud-sdk
 
-This Discord bot allows you to create and manage multiple poll configurations across different Discord servers simultaneously. Each poll configuration can have its own unique settings, including:
+# Windows
+# Download installer from: https://cloud.google.com/sdk/docs/install
 
-- Poll type (identifier for different kinds of polls)
-- Server (Guild) ID
-- Admin role ID
-- Dashboard command name
-
-The bot uses JSON configuration files to define these poll settings, making it easy to add or modify poll types without changing the core code.
-
-## Features
-
-- Support for multiple Discord servers simultaneously
-- Custom poll types with separate configurations
-- Button-based voting interface
-- Multiple selection support
-- Points system for correct answers
-- User statistics and leaderboard
-- Admin controls for poll management
-- Customizable dashboard commands for each poll type
-- Automatic poll expiration
-- Database storage for poll results and user statistics
-
-## Requirements
-
-- Python 3.9+
-- PostgreSQL database
-- Discord Bot Token and Application ID
-
-## Installation
-
-1. Clone the repository:
-```
-git clone https://github.com/yourusername/most-recent-discord-poll-bot.git
-cd most-recent-discord-poll-bot
+# Linux (Debian/Ubuntu)
+sudo apt-get update && sudo apt-get install apt-transport-https ca-certificates gnupg
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+sudo apt-get update && sudo apt-get install google-cloud-sdk
 ```
 
-2. Create and activate a virtual environment:
-```
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+## 2. Authenticate and Set Project
 
-3. Install dependencies:
-```
-pip install -r requirements.txt
-```
+```bash
+# Log in to your Google account
+gcloud auth login
 
-4. Set up PostgreSQL database:
+# Set your active project
+gcloud config set project YOUR_PROJECT_ID
 
-Start PostgreSQL service (if not already running)
-On macOS:
-```
-brew services start postgresql
-```
-On Ubuntu/Debian:
-```
-sudo service postgresql start
-```
-On Windows:
-
-Start PostgreSQL through Services app
-Create database and user (in psql console)
-```
-psql postgres
-CREATE USER <username> WITH PASSWORD '<password>';
-CREATE DATABASE <dbname>;
-GRANT ALL PRIVILEGES ON DATABASE <dbname> TO <username>;
-\c <dbname>
-GRANT ALL PRIVILEGES ON SCHEMA public TO <username>;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO <username>;
-\q
-```
-Or alternatively with separate commands:
-```
-psql postgres -c "CREATE USER <username> WITH PASSWORD '<password>';"
-psql postgres -c "CREATE DATABASE <dbname>;"
-psql postgres -c "GRANT ALL PRIVILEGES ON DATABASE <dbname> TO <username>;"
-psql <dbname> -c "GRANT ALL PRIVILEGES ON SCHEMA public TO <username>;"
-psql <dbname> -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO <username>;"
+# Verify your current project
+gcloud config get-value project
+# Should output: YOUR_PROJECT_ID
 ```
 
-5. Create a `.env` file in the root directory with the following content:
-```
-# Discord Configuration
-DISCORD_TOKEN=your_bot_token
-DISCORD_APPLICATION_ID=your_application_id
+## 3. Enable Required APIs
 
-# Database Configuration
-DATABASE_URL=postgresql+asyncpg://username:password@localhost:5432/dbname
+```bash
+gcloud services enable cloudbuild.googleapis.com run.googleapis.com secretmanager.googleapis.com sqladmin.googleapis.com storage.googleapis.com
 ```
 
-6. Initialize the database:
-```
-alembic upgrade head
-```
+## 4. Create Cloud Storage Bucket
 
-7. Create poll configuration files in the `scripts` directory (see examples below)
-
-## Poll Configuration
-
-Each poll type requires a JSON configuration file in the `scripts` directory. Example:
-
-```json
-{
-    "poll_type": "your_poll_type",
-    "discord_guild_id": "your_guild_id",
-    "discord_admin_role_id": "your_admin_role_id",
-    "dashboard_command": "dashboard_your_poll_type"
-}
+```bash
+gsutil mb -l us-central1 gs://YOUR_PROJECT_ID-poll-configs
 ```
 
-Parameters:
-- `poll_type`: Unique identifier for this poll type
-- `discord_guild_id`: ID of the Discord server where this poll will be active
-- `discord_admin_role_id`: ID of the admin role that can manage this poll
-- `dashboard_command`: Command name for accessing the dashboard for this poll type
+## 5. Upload Poll Configurations
 
-## Usage
-
-Start the bot with one or more poll configurations:
-
-```
-python main.py --config scripts/poll1.json,scripts/poll2.json,scripts/poll3.json
+```bash
+gsutil cp scripts/*.json gs://YOUR_PROJECT_ID-poll-configs/
 ```
 
-You can also specify the number of shards if your bot is in many servers:
+## 6. Create Cloud SQL Instance
 
-```
-python main.py --config scripts/poll1.json,scripts/poll2.json --shards 2
-```
-
-## Bot Invite URL
-
-Invite the bot to your server using this URL (replace `YOUR_APPLICATION_ID` with your actual application ID):
-
-```
-https://discord.com/api/oauth2/authorize?client_id=YOUR_APPLICATION_ID&permissions=2147483648&scope=bot%20applications.commands
+```bash
+gcloud sql instances create discord-poll-db \
+  --database-version=POSTGRES_14 \
+  --tier=db-f1-micro \
+  --region=us-central1 \
+  --root-password=YOUR_SECURE_PASSWORD
 ```
 
-## Commands
+## 7. Create Database and User
 
-### Admin Commands
-- `/create_[poll_type]` - Create a new poll for the specified poll type
-  - `question` - The poll question (required)
-  - `options` - Options separated by commas (e.g., 'Red,Blue,Green') (required)
-  - `description` - Optional description for the poll
-  - `max_selections` - Maximum number of options a user can select (optional, default: 1)
-  - `duration` - Duration format: '5d' (days), '24h' (hours), '30m' (minutes) (optional, default: 5 days)
-  - `show_votes_while_active` - Whether to show vote counts while the poll is active (optional, default: False)
+```bash
+# Create database
+gcloud sql databases create discordpoll --instance=discord-poll-db
 
-- `/close_[poll_type]` - Close the current active poll for the specified poll type
+# Create database user
+gcloud sql users create discordu \
+  --instance=discord-poll-db \
+  --password=YOUR_USER_PASSWORD
+```
 
-- `/reveal_[poll_type]` - Reveal the correct answers for the closed poll of the specified poll type
+## 8. Store Secrets
 
-### User Commands
-- `/vote_[poll_type]` - Vote on the active poll for the specified poll type
+```bash
+# Store Discord token
+echo -n "YOUR_DISCORD_TOKEN" | gcloud secrets create discord-token --data-file=-
 
-- `/dashboard_[poll_type]` - View your personal statistics and leaderboard for the specified poll type
-  - Shows your total points, correct answers, and current rank
-  - Displays the global leaderboard with medals for top ranks
+# Store Discord application ID
+echo -n "YOUR_DISCORD_APPLICATION_ID" | gcloud secrets create discord-application-id --data-file=-
 
-- `/showhelp` - Display help information about available commands
+# Store database connection string
+echo -n "postgresql+asyncpg://discordu:YOUR_USER_PASSWORD@/discordpoll?host=/cloudsql/YOUR_PROJECT_ID:us-central1:discord-poll-db" | \
+  gcloud secrets create database-url --data-file=-
+```
 
-Note: Replace `[poll_type]` with the actual poll type defined in your configuration files (e.g., `world_pvp`, `shooting_eagle`, `another_vote`)
+## 9. Configure IAM Roles and Permissions
 
-## Development
+The Discord Poll Bot requires specific IAM roles for the service accounts to access resources such as Cloud Run, Cloud Build, and Secret Manager.
 
-- The bot uses Discord.py library for interaction with Discord's API
-- SQLAlchemy for database interactions
-- Alembic for database migrations
-- Follow PEP 8 style guide
-- Add type hints to all functions
-- Write tests for new features
+First, retrieve your project number and set up variables for service accounts:
 
-## Project Structure
+```bash
+# Get your project number
+PROJECT_NUMBER=$(gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)")
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+CLOUDBUILD_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
 
-- `main.py`: Main entry point for the bot
-- `scripts/`: Directory containing poll configuration files
-- `src/`: Source code
-  - `config/`: Configuration and settings
-  - `database/`: Database models and connection logic
-  - `services/`: Business logic services
-  - `bot/`: Discord bot functionality
-  - `utils/`: Utility functions
-- `alembic/`: Database migration scripts
+# Verify the service accounts
+echo "Compute Engine SA: $COMPUTE_SA"
+echo "Cloud Build SA: $CLOUDBUILD_SA"
+```
 
-## Note
-Make sure to replace:
-- `<username>`, `<password>`, `<dbname>` with your desired database credentials
-- `your_bot_token` with your Discord bot token
-- `your_application_id` with your Discord application ID
-- Other Discord IDs with your server's specific IDs
+Check existing permissions for these service accounts:
 
-## License
+```bash
+# Check current IAM roles for service accounts
+gcloud projects get-iam-policy YOUR_PROJECT_ID --format=json | grep -A 10 "$COMPUTE_SA"
+gcloud projects get-iam-policy YOUR_PROJECT_ID --format=json | grep -A 10 "$CLOUDBUILD_SA"
+```
 
-MIT License
+Add the necessary permissions if not already present:
+
+```bash
+# Grant Secret Manager Secret Accessor role to Compute Engine default service account
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$COMPUTE_SA" \
+  --role="roles/secretmanager.secretAccessor"
+
+# Grant Secret Manager Secret Accessor role to Cloud Build service account
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$CLOUDBUILD_SA" \
+  --role="roles/secretmanager.secretAccessor"
+
+# Grant Cloud Run Admin role to Cloud Build service account
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$CLOUDBUILD_SA" \
+  --role="roles/run.admin"
+
+# Grant Service Account User role to Cloud Build service account
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$CLOUDBUILD_SA" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+You might also need to check and add roles to your own user account:
+
+```bash
+# List your current IAM roles
+gcloud projects get-iam-policy YOUR_PROJECT_ID --format=json | grep -A 5 "$(gcloud config get-value account)"
+
+# Add missing roles to your account if needed
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="user:YOUR_EMAIL" \
+  --role="roles/cloudbuild.builds.editor"
+```
+
+> **Important**: Replace `YOUR_PROJECT_ID` with your Google Cloud project ID and `YOUR_EMAIL` with your Google account email address.
+
+Without these permissions, your deployment will fail with errors such as:
+- "Permission denied on secret: projects/YOUR_PROJECT_ID/secrets/DISCORD_TOKEN/versions/latest"
+- "The service account used must be granted the 'Secret Manager Secret Accessor' role"
+
+## 10. Deploy to Cloud Run
+
+### Create your cloudbuild.yaml file
+
+The repository includes a `cloudbuild.yaml.example` file with placeholders. You need to create your own `cloudbuild.yaml` file based on this example with your specific values:
+
+1. Copy the example file to create your actual configuration:
+   ```bash
+   cp cloudbuild.yaml.example cloudbuild.yaml
+   ```
+
+2. Edit the `cloudbuild.yaml` file to replace placeholder values:
+   - Replace `YOUR_IMAGE_NAME` with `discord-poll-bot` (or your preferred service name)
+   - Replace `YOUR_CLOUD_SQL_REGION` with your desired region (e.g., `us-central1`)
+   - Replace `YOUR_CLOUD_SQL_INSTANCE_NAME` with your Cloud SQL instance name
+   - Replace secret names with your actual secret names if they differ from the defaults
+   - Make any other adjustments needed for your specific setup
+
+> **Important**: The `cloudbuild.yaml` file contains sensitive information and should not be committed to your repository. Add it to your `.gitignore` file to prevent accidental commits.
+
+### Submit the build
+
+Once your `cloudbuild.yaml` file is configured:
+
+```bash
+gcloud builds submit --config cloudbuild.yaml
+```
+
+## 11. Run Initial Database Migrations
+
+```bash
+# Download Cloud SQL Auth Proxy
+curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.6.0/cloud-sql-proxy.linux.amd64
+chmod +x cloud-sql-proxy
+
+# Start the proxy
+./cloud-sql-proxy --port 5432 YOUR_PROJECT_ID:us-central1:YOUR_SQL_INSTANCE &
+```
+
+### Troubleshooting Cloud SQL Proxy
+
+If you encounter issues with the Cloud SQL Proxy, try these steps:
+
+```bash
+# Check if any Cloud SQL Proxy processes are already running
+ps aux | grep cloud-sql-proxy
+
+# Kill any existing Cloud SQL Proxy processes if necessary
+pkill -f cloud-sql-proxy
+
+# If port 5432 is already in use (e.g., by a local PostgreSQL instance), use a different port
+./cloud-sql-proxy --port 5433 YOUR_PROJECT_ID:us-central1:YOUR_SQL_INSTANCE &
+
+# Run the proxy with output redirected to a log file for better monitoring
+nohup ./cloud-sql-proxy --port 5433 YOUR_PROJECT_ID:us-central1:YOUR_SQL_INSTANCE > proxy.log 2>&1 &
+```
+
+### Install Required Google Cloud Packages
+
+Ensure you have the required Google Cloud packages installed in your Python environment:
+
+```bash
+pip install google-cloud-secret-manager google-cloud-storage
+```
+
+### Run Migrations
+
+```bash
+# Set environment variables
+export GCP_PROJECT_ID=YOUR_PROJECT_ID
+
+# Run migrations
+python -m scripts.run_migrations_cloud
+```
+
+> **Note:** While the DATABASE_URL would typically be required for direct database access, `run_migrations_cloud.py` retrieves this value directly from Secret Manager using the `GCP_PROJECT_ID`, so you don't need to set it manually.
+
+## 12. Monitor Your Deployment
+
+```bash
+# View logs from Cloud Run
+gcloud run services logs read discord-poll-bot
+
+# Check service status
+gcloud run services describe discord-poll-bot
+
+# Access your service at the provided URL (example)
+# https://discord-poll-bot-YOUR_PROJECT_NUMBER.us-central1.run.app
+```
+
+## Storage Analysis
+
+### Current Parameters
+- 10,000 weekly active users
+- Multiple tables storing poll data, user votes, scores, and UI states
+- Running for 1.5 years (approximately 78 weeks)
+
+### Estimated Weekly Data Generation
+- Polls and options: ~20 KB/week
+- User votes and selections: ~4 MB/week
+- Score updates: ~1 MB/week
+- UI states: ~3 MB/week
+- Misc. data: ~0.2 MB/week
+
+### Total Estimated Storage
+- Weekly growth: ~8 MB
+- 1.5 years (78 weeks): ~624 MB
+- With indices, logs, and overhead: ~1-1.5 GB
+
+### Cloud SQL db-f1-micro Analysis
+- 10 GB storage included
+- Automatic storage increases available
+- For your estimated 1-1.5 GB requirement over 1.5 years, this tier is sufficient
+- You have ~6-7x capacity buffer before needing expansion
+
+### Auto-scaling Capabilities
+- **Storage**: Yes, Cloud SQL automatically increases storage when you reach 90% capacity
+- **Performance**: To scale compute resources (CPU/RAM), you would need to manually change to a higher tier 
+
+## Local Development with Cloud SQL
+
+### Connecting to Cloud SQL with Postico 2
+
+You can connect to your Cloud SQL instance from local PostgreSQL clients like Postico 2 using the Cloud SQL Auth Proxy:
+
+1. **Ensure Cloud SQL Auth Proxy is running**:
+   ```bash
+   # Start the proxy if not already running
+   ./cloud-sql-proxy --port 5433 YOUR_PROJECT_ID:us-central1:discord-poll-db &
+   
+   # Or check if it's already running
+   ps aux | grep cloud-sql-proxy
+   ```
+
+2. **Configure Postico 2 connection**:
+   
+   In Postico 2, create a new connection with these settings:
+   
+   - **Nickname**: Cloud SQL Discord Poll Bot
+   - **Host**: localhost
+   - **Port**: 5433 (or whatever port you specified when starting the proxy)
+   - **User**: discorduser (the database user you created)
+   - **Password**: YOUR_USER_PASSWORD (the password you set)
+   - **Database**: discordpoll
+   
+   ![Postico Connection Settings](https://i.imgur.com/example.png)
+
+3. **Test connection**:
+   
+   Click "Connect" to test the connection. If successful, you can now browse and manage your Cloud SQL database as if it were running locally.
+
+4. **When finished**:
+   
+   You can stop the Cloud SQL Auth Proxy when no longer needed:
+   ```bash
+   pkill -f cloud-sql-proxy
+   ```
+
+> **Note**: Always ensure the Cloud SQL Auth Proxy is running before attempting to connect with Postico 2. 

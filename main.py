@@ -6,6 +6,8 @@ from logging.handlers import RotatingFileHandler
 import json
 from pathlib import Path
 import time
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import discord
 from discord.ext import commands
@@ -85,10 +87,33 @@ class PollBot(commands.Bot):
         self.rate_limited_guilds = {}
     
     def _load_poll_configs(self):
-        """Load poll configurations from JSON files."""
+        """Load poll configurations from JSON files or Cloud Storage."""
         try:
             # Get config files from command line arguments
             args = parse_args()
+            
+            # Check if we should load from Cloud Storage
+            if args.config.lower() == "cloud":
+                logger.info("Loading poll configurations from Cloud Storage...")
+                from src.config.cloud_storage import load_configs_from_cloud_storage
+                cloud_configs = load_configs_from_cloud_storage()
+                
+                for config in cloud_configs:
+                    guild_id = int(config.get("discord_guild_id"))
+                    if guild_id not in self.poll_configs:
+                        self.poll_configs[guild_id] = []
+                    # Convert config to PollConfig object
+                    poll_config = PollConfig(
+                        poll_type=config['poll_type'],
+                        guild_id=guild_id,
+                        admin_role_id=int(config['discord_admin_role_id']),
+                        dashboard_command=config['dashboard_command']
+                    )
+                    self.poll_configs[guild_id].append(poll_config)
+                    logger.info(f"Loaded poll config from Cloud Storage: {config}")
+                return
+            
+            # Load from local files if not using Cloud Storage
             config_files = [Path(path.strip()) for path in args.config.split(',') if path.strip()]
             
             for config_file in config_files:
@@ -332,60 +357,57 @@ class PollBot(commands.Bot):
             logger.error(f"Error in command diagnostics: {e}", exc_info=True)
 
 async def main():
+    # Parse command line arguments
     args = parse_args()
     
-    # Load environment variables - direct loading method
-    token = None
-    application_id = None
-    if os.path.exists('.env'):
-        try:
-            # Read token and application_id directly from file to avoid any caching issues
-            import re
-            with open('.env', 'r') as f:
-                env_content = f.read()
-                
-            # Extract token
-            token_match = re.search(r'DISCORD_TOKEN=([^\n]+)', env_content)
-            if token_match:
-                token = token_match.group(1)
-                logger.info(f"Token loaded directly from file, length: {len(token)}")
-                
-            # Extract application_id
-            app_id_match = re.search(r'DISCORD_APPLICATION_ID=([^\n]+)', env_content)
-            if app_id_match:
-                application_id = int(app_id_match.group(1))  # Convert to integer
-                logger.info(f"Application ID loaded directly from file: {application_id}")
-            else:
-                # Fallback to dotenv if regex fails
-                from dotenv import load_dotenv
-                load_dotenv(override=True)
-                token = os.getenv('DISCORD_TOKEN')
-                application_id = int(os.getenv('DISCORD_APPLICATION_ID'))
-                logger.info(f"Token loaded via dotenv, length: {len(token) if token else 0}")
-                logger.info(f"Application ID loaded via dotenv: {application_id}")
-        except Exception as e:
-            logger.error(f"Error loading environment variables: {e}")
-            from dotenv import load_dotenv
-            load_dotenv(override=True)
-            token = os.getenv('DISCORD_TOKEN')
-            try:
-                application_id = int(os.getenv('DISCORD_APPLICATION_ID'))
-            except:
-                logger.error("Failed to convert application ID to integer")
-                application_id = None
+    # Get the token and application ID from environment variables
+    token = os.getenv('DISCORD_TOKEN')
+    if not token:
+        logger.error("DISCORD_TOKEN environment variable is required but not set")
+        return
     
-    # Determine shard count and create bot
-    shard_count = args.shards
-    logger.info(f"Starting bot with {shard_count} shard(s)")
+    application_id = os.getenv('DISCORD_APPLICATION_ID')
+    if not application_id:
+        logger.error("DISCORD_APPLICATION_ID environment variable is required but not set")
+        return
     
-    # Create and run bot with sharding - pass application_id explicitly
-    async with PollBot(shard_count=shard_count, application_id=application_id) as bot:
-        try:
-            logger.info("Attempting to start bot...")
+    # Initialize and start the bot
+    try:
+        # Start HTTP server for Cloud Run health checks
+        port = int(os.environ.get("PORT", "8080"))
+        start_http_server(port)
+        
+        # Create and run the bot
+        async with PollBot(
+            shard_count=args.shards,
+            application_id=application_id
+        ) as bot:
+            logger.info(f"Starting bot with {args.shards} shard(s)")
             await bot.start(token)
-        except Exception as e:
-            logger.error(f"Error starting bot: {type(e).__name__}: {e}")
-            raise
+    except Exception as e:
+        logger.error(f"Error starting bot: {e}", exc_info=True)
+        raise
+
+# Simple HTTP server to satisfy Cloud Run requirements
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Discord Poll Bot is running")
+    
+    def log_message(self, format, *args):
+        # Suppress logs for health check requests to avoid log spam
+        return
+
+def start_http_server(port):
+    """Start HTTP server in a separate thread for Cloud Run health checks"""
+    logger.info(f"Starting health check HTTP server on port {port}")
+    server = HTTPServer(("", port), HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True  # So the thread will exit when the main program exits
+    thread.start()
+    logger.info(f"Health check HTTP server started on port {port}")
 
 if __name__ == "__main__":
     asyncio.run(main())

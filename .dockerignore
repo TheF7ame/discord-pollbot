@@ -1,0 +1,41 @@
+# Environment files with secrets
+.env
+.env.*
+*.env
+
+# Configuration files with credentials
+scripts/*.json
+!scripts/*.example.json
+
+# Other sensitive files
+*.pem
+*.key
+*.crt
+gcp-key.json
+
+# Development artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.venv/
+venv/
+ENV/
+.git/
+.github/
+.gitignore 
+
+# Cloud Build
+cloudbuild.yaml
+
+# Cloud SQL Proxy
+cloud-sql-proxy
+
+
