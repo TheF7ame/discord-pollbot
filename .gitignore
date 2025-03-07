@@ -33,6 +33,9 @@ config.json
 *.env.local
 *.env.development
 *.env.production
+scripts/*.json
+!scripts/*.example.json
+gcp-key.json
 
 # Database files
 *.db
@@ -89,3 +92,9 @@ temp/
 
 # Local scripts
 scripts/*.json
+
+# Cloud Build
+cloudbuild.yaml
+
+# Cloud SQL Proxy
+cloud-sql-proxy

@@ -8,6 +8,10 @@ from pathlib import Path
 import re
 import sqlalchemy
 from sqlalchemy import create_engine, text
+import threading
+import http.server
+import socketserver
+from http import HTTPStatus
 
 import discord
 from discord.ext import commands
@@ -16,6 +20,10 @@ from src.config.settings import Settings, PollConfig
 from src.database.database import Database, initialize_database
 from src.services.guild_service import GuildService
 from src.services.poll_service import PollService
+
+# Add import for cloud storage
+from src.config.cloud_storage import load_configs_from_cloud_storage
+from google.cloud import secretmanager
 
 # Function to reset commands for all guilds in the database
 async def reset_commands_for_all_guilds(token, application_id):
@@ -98,13 +106,26 @@ def get_guild_ids_from_db():
         logger.error(f"Error retrieving guild IDs from database: {e}")
         return []
 
+# Function to retrieve a secret from Secret Manager
+def get_secret(secret_id):
+    """Retrieve a secret from Secret Manager."""
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        project_id = os.environ.get("GCP_PROJECT_ID")
+        name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        return response.payload.data.decode("UTF-8")
+    except Exception as e:
+        logger.error(f"Error retrieving secret {secret_id}: {e}")
+        return None
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Run the Discord Poll Bot')
     parser.add_argument(
         '--config',
         type=str,
-        help='Comma-separated list of poll configuration JSON files',
+        help='Comma-separated list of poll configuration JSON files or "cloud" to load from Cloud Storage',
         required=True
     )
     parser.add_argument(
@@ -173,22 +194,25 @@ class PollBot(commands.Bot):
         self.rate_limited_guilds = set()
     
     def _load_poll_configs(self, config_paths=None):
-        """Load poll configurations from JSON files."""
+        """Load poll configurations from JSON files or Cloud Storage."""
         try:
             if config_paths:
-                # Load only the specified config files
-                logger.info(f"Loading specified config files: {config_paths}")
-                for config_path in config_paths:
-                    config_file = Path(config_path)
-                    if not config_file.exists():
-                        logger.warning(f"Config file not found: {config_path}")
-                        continue
+                # Check if we're using cloud storage
+                if isinstance(config_paths, list) and len(config_paths) == 1 and config_paths[0] == "cloud":
+                    logger.info("Loading poll configurations from Cloud Storage")
+                    
+                    # Load configurations from Cloud Storage
+                    cloud_configs = load_configs_from_cloud_storage()
+                    
+                    if not cloud_configs:
+                        logger.warning("No configurations found in Cloud Storage")
+                        return
                         
-                    with open(config_file) as f:
-                        config = json.load(f)
+                    for config in cloud_configs:
                         guild_id = int(config.get("discord_guild_id"))
                         if guild_id not in self.poll_configs:
                             self.poll_configs[guild_id] = []
+                            
                         # Convert config to PollConfig object
                         poll_config = PollConfig(
                             poll_type=config['poll_type'],
@@ -197,29 +221,32 @@ class PollBot(commands.Bot):
                             dashboard_command=config['dashboard_command']
                         )
                         self.poll_configs[guild_id].append(poll_config)
-                        logger.info(f"Loaded poll config from {config_file}: {config}")
-            else:
-                # Fallback to loading all JSON files if no specific config paths provided
-                logger.warning("No config paths specified, loading all JSON files from scripts directory")
-                config_dir = Path("scripts")
-                for config_file in config_dir.glob("*.json"):
-                    with open(config_file) as f:
-                        config = json.load(f)
-                        guild_id = int(config.get("discord_guild_id"))
-                        if guild_id not in self.poll_configs:
-                            self.poll_configs[guild_id] = []
-                        # Convert config to PollConfig object
-                        poll_config = PollConfig(
-                            poll_type=config['poll_type'],
-                            guild_id=guild_id,
-                            admin_role_id=int(config['discord_admin_role_id']),
-                            dashboard_command=config['dashboard_command']
-                        )
-                        self.poll_configs[guild_id].append(poll_config)
-                        logger.info(f"Loaded poll config from {config_file}: {config}")
+                        logger.info(f"Loaded poll config from Cloud Storage: {config['poll_type']}")
+                else:
+                    # Load only the specified config files
+                    logger.info(f"Loading specified config files: {config_paths}")
+                    for config_path in config_paths:
+                        config_file = Path(config_path)
+                        if not config_file.exists():
+                            logger.warning(f"Config file not found: {config_path}")
+                            continue
+                            
+                        with open(config_file) as f:
+                            config = json.load(f)
+                            guild_id = int(config.get("discord_guild_id"))
+                            if guild_id not in self.poll_configs:
+                                self.poll_configs[guild_id] = []
+                            # Convert config to PollConfig object
+                            poll_config = PollConfig(
+                                poll_type=config['poll_type'],
+                                guild_id=guild_id,
+                                admin_role_id=int(config['discord_admin_role_id']),
+                                dashboard_command=config['dashboard_command']
+                            )
+                            self.poll_configs[guild_id].append(poll_config)
+                            logger.info(f"Loaded poll config from {config_file}: {config}")
         except Exception as e:
-            logger.error(f"Error loading poll configs: {e}", exc_info=True)
-            raise
+            logger.error(f"Error loading poll configurations: {e}", exc_info=True)
 
     async def safe_sync_commands(self, guild=None, attempt=1):
         """Safely sync commands with rate limit handling."""
@@ -380,17 +407,71 @@ class PollBot(commands.Bot):
             else:
                 logger.warning(f"  No poll configurations found for this guild")
 
+# Function to start a simple HTTP server for Cloud Run health checks
+def start_http_server():
+    """Start a simple HTTP server to satisfy Cloud Run's requirements."""
+    class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Discord Poll Bot is running!")
+            return
+            
+        def log_message(self, format, *args):
+            # Suppress logging to avoid cluttering the output
+            return
+    
+    port = int(os.environ.get("PORT", 8080))
+    server = socketserver.TCPServer(("", port), HealthCheckHandler)
+    logger.info(f"Starting HTTP server on port {port}")
+    server.serve_forever()
+
 async def main():
     args = parse_args()
     
-    # Parse the comma-separated list of config files
-    config_paths = [path.strip() for path in args.config.split(',')]
-    logger.info(f"Using config files: {config_paths}")
+    # Check if config is "cloud" or a list of files
+    if args.config == "cloud":
+        config_paths = ["cloud"]
+        logger.info("Using Cloud Storage for poll configurations")
+    else:
+        # Parse the comma-separated list of config files
+        config_paths = [path.strip() for path in args.config.split(',')]
+        logger.info(f"Using config files: {config_paths}")
     
-    # Load environment variables - direct loading method
+    # Load environment variables
     token = None
     application_id = None
-    if os.path.exists('.env'):
+    
+    # Check if we're in a cloud environment
+    use_cloud_storage = os.environ.get('USE_CLOUD_STORAGE', 'false').lower() == 'true'
+    
+    if use_cloud_storage and os.environ.get('GCP_PROJECT_ID'):
+        # Get Discord token and application ID from Secret Manager
+        logger.info("Retrieving secrets from Secret Manager")
+        token = get_secret("DISCORD_TOKEN")
+        app_id_str = get_secret("DISCORD_APPLICATION_ID")
+        
+        if token:
+            logger.info(f"Retrieved token from Secret Manager, length: {len(token)}")
+        else:
+            logger.error("Failed to retrieve token from Secret Manager")
+            
+        if app_id_str:
+            try:
+                application_id = int(app_id_str)
+                logger.info(f"Retrieved application ID from Secret Manager: {application_id}")
+            except ValueError:
+                logger.error(f"Invalid application ID format retrieved from Secret Manager")
+        else:
+            logger.error("Failed to retrieve application ID from Secret Manager")
+            
+        # Start HTTP server for Cloud Run in a separate thread
+        if os.environ.get('PORT'):
+            logger.info("Starting HTTP server for Cloud Run health checks")
+            http_thread = threading.Thread(target=start_http_server, daemon=True)
+            http_thread.start()
+    elif os.path.exists('.env'):
         try:
             # Read token and application_id directly from file to avoid any caching issues
             with open('.env', 'r') as f:
