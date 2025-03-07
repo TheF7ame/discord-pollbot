@@ -5,6 +5,9 @@ import os
 from logging.handlers import RotatingFileHandler
 import json
 from pathlib import Path
+import re
+import sqlalchemy
+from sqlalchemy import create_engine, text
 
 import discord
 from discord.ext import commands
@@ -13,6 +16,87 @@ from src.config.settings import Settings, PollConfig
 from src.database.database import Database, initialize_database
 from src.services.guild_service import GuildService
 from src.services.poll_service import PollService
+
+# Function to reset commands for all guilds in the database
+async def reset_commands_for_all_guilds(token, application_id):
+    """Reset commands for all guilds in the database before starting the bot."""
+    logger.info("Initializing bot startup - resetting commands for all guilds")
+    
+    # Get guild IDs from database
+    guild_ids = get_guild_ids_from_db()
+    if not guild_ids:
+        logger.warning("No guilds found in database or unable to retrieve guild IDs")
+        return
+    
+    # Set up client with application ID
+    client = discord.Client(intents=discord.Intents.default())
+    
+    try:
+        # Connect to Discord
+        logger.info("Connecting to Discord to reset commands...")
+        await client.login(token)
+        
+        # Create command tree
+        tree = discord.app_commands.CommandTree(client)
+        
+        # Clear and sync global commands first
+        logger.info("Clearing global commands")
+        tree.clear_commands(guild=None)
+        await tree.sync()
+        logger.info("Successfully reset global commands")
+        
+        # Clear commands for each guild in database
+        success_count = 0
+        logger.info(f"Resetting commands for {len(guild_ids)} guilds...")
+        
+        for guild_id in guild_ids:
+            try:
+                guild = discord.Object(id=int(guild_id))
+                logger.info(f"Clearing commands for guild: {guild_id}")
+                tree.clear_commands(guild=guild)
+                await tree.sync(guild=guild)
+                logger.info(f"Successfully reset commands for guild {guild_id}")
+                success_count += 1
+                # Add a short delay to avoid rate limits
+                await asyncio.sleep(2)
+            except Exception as e:
+                logger.error(f"Error resetting commands for guild {guild_id}: {e}")
+        
+        logger.info(f"Command reset complete - successfully reset commands for {success_count}/{len(guild_ids)} guilds")
+    except Exception as e:
+        logger.error(f"Error during command reset: {e}")
+    finally:
+        # Close the client
+        await client.close()
+        logger.info("Disconnected from Discord after resetting commands")
+
+def get_guild_ids_from_db():
+    """Fetch all guild IDs from the database using synchronized SQLAlchemy connection."""
+    try:
+        # Get database URL from environment
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            logger.error("DATABASE_URL not found in environment variables")
+            return []
+        
+        # Convert asyncpg URL to standard PostgreSQL URL if needed
+        if '+asyncpg' in database_url:
+            logger.info("Converting asyncpg URL to standard PostgreSQL URL")
+            database_url = database_url.replace('+asyncpg', '')
+        
+        # Create database engine with synchronous driver
+        engine = create_engine(database_url)
+        
+        # Query all guild IDs from the guilds table
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT guild_id FROM guilds"))
+            guild_ids = [str(row[0]) for row in result]
+        
+        logger.info(f"Found {len(guild_ids)} guilds in the database")
+        return guild_ids
+    except Exception as e:
+        logger.error(f"Error retrieving guild IDs from database: {e}")
+        return []
 
 def parse_args():
     """Parse command line arguments."""
@@ -28,6 +112,11 @@ def parse_args():
         type=int,
         default=1,
         help='Number of shards to use (default: 1)'
+    )
+    parser.add_argument(
+        '--no-reset',
+        action='store_true',
+        help='Skip resetting commands on startup'
     )
     return parser.parse_args()
 
@@ -194,15 +283,25 @@ class PollBot(commands.Bot):
             # Log initial command state
             logger.info(f"Initial command tree state: {[cmd.name for cmd in self.tree.get_commands()]}")
             
-            # Clear all commands again before loading extensions
+            # Clear all commands from the global scope
             self.tree.clear_commands(guild=None)
+            logger.info("Cleared global commands")
+            
+            # Clear commands from all guilds that have config
             for guild_id in self.poll_configs.keys():
-                self.tree.clear_commands(guild=discord.Object(id=guild_id))
+                guild = discord.Object(id=guild_id)
+                self.tree.clear_commands(guild=guild)
+                logger.info(f"Cleared commands for guild {guild_id}")
             
-            # Only sync global commands at this point
+            # Sync the empty global command list to clean up any global commands
             await self.safe_sync_commands()
+            logger.info("Synced empty global command list")
             
-            logger.info("Cleared all commands before setup")
+            # Sync empty command lists for each configured guild to clean up old commands
+            for guild_id in self.poll_configs.keys():
+                guild = discord.Object(id=guild_id)
+                await self.safe_sync_commands(guild=guild)
+                logger.info(f"Synced empty command list for guild {guild_id}")
             
             # Ensure guilds and admin roles are set up
             async with self.db() as session:
@@ -223,7 +322,7 @@ class PollBot(commands.Bot):
                 
                 await session.commit()
             
-            # Load extensions sequentially with delay between each to avoid rate limits
+            # Load extensions with delay between each to avoid rate limits
             extensions = [
                 "src.bot.cogs.poll_commands",
                 "src.bot.cogs.dashboard_commands",
@@ -294,7 +393,6 @@ async def main():
     if os.path.exists('.env'):
         try:
             # Read token and application_id directly from file to avoid any caching issues
-            import re
             with open('.env', 'r') as f:
                 env_content = f.read()
                 
@@ -327,6 +425,13 @@ async def main():
             except:
                 logger.error("Failed to convert application ID to integer")
                 application_id = None
+    
+    # Reset commands for all guilds before starting the bot (unless --no-reset flag is specified)
+    if not args.no_reset:
+        logger.info("Resetting commands for all guilds before starting bot")
+        await reset_commands_for_all_guilds(token, application_id)
+    else:
+        logger.info("Skipping command reset due to --no-reset flag")
     
     # Determine shard count and create bot
     shard_count = args.shards

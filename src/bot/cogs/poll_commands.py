@@ -70,6 +70,9 @@ class PollCommands(commands.Cog):
                     # Register all commands at once for this guild to minimize API calls
                     commands_registered = False
                     
+                    # Track commands registered for this guild
+                    registered_commands = []
+                    
                     for config in configs:
                         try:
                             poll_type = config.poll_type
@@ -81,6 +84,15 @@ class PollCommands(commands.Cog):
                             reveal_poll_cmd = self._reveal_poll_command(poll_type)
                             vote_cmd = self._vote_command(poll_type)
                             
+                            # Track command names being registered
+                            poll_commands = [
+                                f"create_{poll_type}",
+                                f"close_{poll_type}",
+                                f"reveal_{poll_type}",
+                                f"vote_{poll_type}"
+                            ]
+                            registered_commands.extend(poll_commands)
+                            
                             # Add commands to the tree
                             self.bot.tree.add_command(create_poll_cmd, guild=guild)
                             self.bot.tree.add_command(close_poll_cmd, guild=guild)
@@ -91,6 +103,9 @@ class PollCommands(commands.Cog):
                             self.logger.error(f"Error registering commands for poll type {poll_type}: {cmd_error}", exc_info=True)
                             # Continue with other poll types even if one fails
                             continue
+                    
+                    # Log what commands were registered
+                    self.logger.info(f"Registered poll commands for guild {guild_id}: {registered_commands}")
                     
                     # Only sync if we actually registered commands
                     if commands_registered:

@@ -30,9 +30,16 @@ class DashboardCommands(commands.Cog):
                 # Register all commands for this guild at once to minimize API calls
                 commands_added = False
                 
+                # Track which dashboard commands are currently registered
+                current_dashboard_commands = []
+                
                 for config in configs:
                     poll_type = config.poll_type
+                    command_name = f"dashboard_{poll_type}"
                     self.logger.info(f"Registering dashboard command for poll type: {poll_type}")
+                    
+                    # Track this command as currently registered
+                    current_dashboard_commands.append(command_name)
                     
                     # Create dashboard command with poll_type properly bound
                     dashboard_cmd = self._create_dashboard_command(poll_type)
@@ -40,6 +47,9 @@ class DashboardCommands(commands.Cog):
                     # Add command to the tree
                     self.bot.tree.add_command(dashboard_cmd, guild=guild)
                     commands_added = True
+                
+                # Log what commands we've registered
+                self.logger.info(f"Registered dashboard commands for guild {guild_id}: {current_dashboard_commands}")
                 
                 # Only sync if we actually added commands
                 if commands_added:
