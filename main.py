@@ -48,7 +48,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PollBot(commands.Bot):
-    def __init__(self, shard_count=1, shard_ids=None, application_id=None):
+    def __init__(self, config_paths=None, shard_count=1, shard_ids=None, application_id=None):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
@@ -73,7 +73,7 @@ class PollBot(commands.Bot):
         
         # Store poll configurations
         self.poll_configs = {}
-        self._load_poll_configs()
+        self._load_poll_configs(config_paths)
 
         # Clear all commands on init
         self.tree.clear_commands(guild=None)
@@ -83,25 +83,51 @@ class PollBot(commands.Bot):
         # Track rate limited guilds
         self.rate_limited_guilds = set()
     
-    def _load_poll_configs(self):
+    def _load_poll_configs(self, config_paths=None):
         """Load poll configurations from JSON files."""
         try:
-            config_dir = Path("scripts")
-            for config_file in config_dir.glob("*.json"):
-                with open(config_file) as f:
-                    config = json.load(f)
-                    guild_id = int(config.get("discord_guild_id"))
-                    if guild_id not in self.poll_configs:
-                        self.poll_configs[guild_id] = []
-                    # Convert config to PollConfig object
-                    poll_config = PollConfig(
-                        poll_type=config['poll_type'],
-                        guild_id=guild_id,
-                        admin_role_id=int(config['discord_admin_role_id']),
-                        dashboard_command=config['dashboard_command']
-                    )
-                    self.poll_configs[guild_id].append(poll_config)
-                    logger.info(f"Loaded poll config from {config_file}: {config}")
+            if config_paths:
+                # Load only the specified config files
+                logger.info(f"Loading specified config files: {config_paths}")
+                for config_path in config_paths:
+                    config_file = Path(config_path)
+                    if not config_file.exists():
+                        logger.warning(f"Config file not found: {config_path}")
+                        continue
+                        
+                    with open(config_file) as f:
+                        config = json.load(f)
+                        guild_id = int(config.get("discord_guild_id"))
+                        if guild_id not in self.poll_configs:
+                            self.poll_configs[guild_id] = []
+                        # Convert config to PollConfig object
+                        poll_config = PollConfig(
+                            poll_type=config['poll_type'],
+                            guild_id=guild_id,
+                            admin_role_id=int(config['discord_admin_role_id']),
+                            dashboard_command=config['dashboard_command']
+                        )
+                        self.poll_configs[guild_id].append(poll_config)
+                        logger.info(f"Loaded poll config from {config_file}: {config}")
+            else:
+                # Fallback to loading all JSON files if no specific config paths provided
+                logger.warning("No config paths specified, loading all JSON files from scripts directory")
+                config_dir = Path("scripts")
+                for config_file in config_dir.glob("*.json"):
+                    with open(config_file) as f:
+                        config = json.load(f)
+                        guild_id = int(config.get("discord_guild_id"))
+                        if guild_id not in self.poll_configs:
+                            self.poll_configs[guild_id] = []
+                        # Convert config to PollConfig object
+                        poll_config = PollConfig(
+                            poll_type=config['poll_type'],
+                            guild_id=guild_id,
+                            admin_role_id=int(config['discord_admin_role_id']),
+                            dashboard_command=config['dashboard_command']
+                        )
+                        self.poll_configs[guild_id].append(poll_config)
+                        logger.info(f"Loaded poll config from {config_file}: {config}")
         except Exception as e:
             logger.error(f"Error loading poll configs: {e}", exc_info=True)
             raise
@@ -258,6 +284,10 @@ class PollBot(commands.Bot):
 async def main():
     args = parse_args()
     
+    # Parse the comma-separated list of config files
+    config_paths = [path.strip() for path in args.config.split(',')]
+    logger.info(f"Using config files: {config_paths}")
+    
     # Load environment variables - direct loading method
     token = None
     application_id = None
@@ -302,8 +332,8 @@ async def main():
     shard_count = args.shards
     logger.info(f"Starting bot with {shard_count} shard(s)")
     
-    # Create and run bot with sharding - pass application_id explicitly
-    async with PollBot(shard_count=shard_count, application_id=application_id) as bot:
+    # Create and run bot with sharding - pass application_id and config_paths explicitly
+    async with PollBot(config_paths=config_paths, shard_count=shard_count, application_id=application_id) as bot:
         try:
             logger.info("Attempting to start bot...")
             await bot.start(token)
