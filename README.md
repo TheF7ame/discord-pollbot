@@ -13,6 +13,13 @@ This Discord bot allows you to create and manage multiple poll configurations ac
 
 The bot uses JSON configuration files to define these poll settings, making it easy to add or modify poll types without changing the core code.
 
+> **Cloud Version Available**: A Google Cloud Platform version of this bot is available in the `gcp-version` branch. 
+> The cloud version utilizes:
+> - Google Cloud Run for serverless deployment
+> - Cloud SQL (PostgreSQL) for database
+> - Cloud Storage for configuration files
+> - Secret Manager for secure credentials management
+
 ## Features
 
 - Support for multiple Discord servers simultaneously
