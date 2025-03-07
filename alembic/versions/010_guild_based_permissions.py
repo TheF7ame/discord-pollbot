@@ -81,11 +81,24 @@ def upgrade() -> None:
         END
         $$;
     """)
+    
+    # Add poll_type to user_scores if not exists
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'user_scores' AND column_name = 'poll_type'
+            ) THEN
+                ALTER TABLE user_scores ADD COLUMN poll_type VARCHAR;
+            END IF;
+        END
+        $$;
+    """)
 
 def downgrade() -> None:
     # Remove guild-based changes
     op.execute("DROP TABLE IF EXISTS admin_roles")
     op.execute("DROP INDEX IF EXISTS uq_active_poll_per_guild_type")
     op.execute("ALTER TABLE polls DROP COLUMN IF EXISTS poll_type")
-    # Remove reference to non-existent user_scores table
-    # op.execute("ALTER TABLE user_scores DROP COLUMN IF EXISTS poll_type") 
+    op.execute("ALTER TABLE user_scores DROP COLUMN IF EXISTS poll_type") 

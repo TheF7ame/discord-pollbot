@@ -5,7 +5,6 @@ import os
 from logging.handlers import RotatingFileHandler
 import json
 from pathlib import Path
-import time
 
 import discord
 from discord.ext import commands
@@ -82,20 +81,13 @@ class PollBot(commands.Bot):
             self.tree.clear_commands(guild=discord.Object(id=guild_id))
         
         # Track rate limited guilds
-        self.rate_limited_guilds = {}
+        self.rate_limited_guilds = set()
     
     def _load_poll_configs(self):
         """Load poll configurations from JSON files."""
         try:
-            # Get config files from command line arguments
-            args = parse_args()
-            config_files = [Path(path.strip()) for path in args.config.split(',') if path.strip()]
-            
-            for config_file in config_files:
-                if not config_file.exists():
-                    logger.warning(f"Config file does not exist: {config_file}")
-                    continue
-                    
+            config_dir = Path("scripts")
+            for config_file in config_dir.glob("*.json"):
                 with open(config_file) as f:
                     config = json.load(f)
                     guild_id = int(config.get("discord_guild_id"))
@@ -114,47 +106,56 @@ class PollBot(commands.Bot):
             logger.error(f"Error loading poll configs: {e}", exc_info=True)
             raise
 
-    async def safe_sync_commands(self, *, force=False, guild=None):
-        """Safely sync commands with Discord's API, handling rate limits."""
+    async def safe_sync_commands(self, guild=None, attempt=1):
+        """Safely sync commands with rate limit handling."""
+        max_attempts = 3
         try:
-            # Log what we're about to do
-            target = f"guild {guild.id}" if guild else "globally"
-            logger.info(f"Syncing commands {target}")
+            guild_id = guild.id if guild else "global"
+            logger.info(f"Syncing commands for {guild_id} (attempt {attempt}/{max_attempts})")
             
-            # Clear commands if force sync is requested
-            if force and guild is not None:
-                self.tree.clear_commands(guild=guild)
-                logger.info(f"Cleared commands for {target}")
+            await self.tree.sync(guild=guild)
             
-            # Get commands that will be synced
-            commands = self.tree.get_commands(guild=guild)
-            logger.info(f"About to sync {len(commands)} commands {target}: {[cmd.name for cmd in commands]}")
-            
-            # Try up to 3 times if we hit rate limits
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    await self.tree.sync(guild=guild)
-                    logger.info(f"Successfully synced commands {target} on attempt {attempt}")
-                    return
-                except discord.HTTPException as e:
-                    if e.status == 429 and attempt < max_attempts:  # Rate limit error
-                        retry_after = e.retry_after or 5  # Default to 5 seconds if not specified
-                        logger.warning(f"Rate limited when syncing commands {target}. Retrying in {retry_after} seconds...")
-                        
-                        # If we're syncing to a specific guild, add it to the rate-limited list
-                        if guild is not None:
-                            self.rate_limited_guilds[str(guild.id)] = time.time() + retry_after
-                        
-                        await asyncio.sleep(retry_after)
-                    else:
-                        # Other HTTP error or we've reached max attempts
-                        logger.error(f"Failed to sync commands {target} after {attempt} attempts: HTTP {e.status} - {e.text}")
-                        raise
-            
+            if guild:
+                logger.info(f"Successfully synced commands for guild {guild_id}")
+                # Remove from rate limited set if it was there
+                if guild.id in self.rate_limited_guilds:
+                    self.rate_limited_guilds.remove(guild.id)
+            else:
+                logger.info("Successfully synced global commands")
+                
+            return True
+        except discord.HTTPException as e:
+            if e.status == 429:  # Rate limit error
+                retry_after = e.retry_after
+                guild_id = guild.id if guild else "global"
+                logger.warning(f"Rate limited when syncing commands for {guild_id}. Retry after: {retry_after}s")
+                
+                if guild:
+                    self.rate_limited_guilds.add(guild.id)
+                
+                if attempt < max_attempts:
+                    # Add some extra buffer to the retry time
+                    await asyncio.sleep(retry_after + 5)
+                    return await self.safe_sync_commands(guild, attempt + 1)
+                else:
+                    logger.warning(f"Max attempts reached for {guild_id}, will try again later")
+                    # Schedule a retry much later
+                    self.loop.create_task(self._retry_sync_much_later(guild))
+                    return False
+            else:
+                logger.error(f"HTTP error syncing commands: {e}")
+                return False
         except Exception as e:
-            logger.error(f"Unexpected error syncing commands {target}: {e}", exc_info=True)
-            raise
+            logger.error(f"Error syncing commands: {e}", exc_info=True)
+            return False
+            
+    async def _retry_sync_much_later(self, guild):
+        """Retry syncing commands after a long delay."""
+        # Wait 10 minutes before retrying
+        await asyncio.sleep(600)
+        guild_id = guild.id if guild else "global"
+        logger.info(f"Attempting delayed sync for {guild_id}")
+        await self.safe_sync_commands(guild)
 
     async def setup_hook(self):
         """Set up the bot's initial state."""
@@ -164,10 +165,18 @@ class PollBot(commands.Bot):
             # Initialize database
             await self.database.init_db()
             
-            # Only clear global commands during setup, leave guild commands to the extensions
+            # Log initial command state
+            logger.info(f"Initial command tree state: {[cmd.name for cmd in self.tree.get_commands()]}")
+            
+            # Clear all commands again before loading extensions
             self.tree.clear_commands(guild=None)
+            for guild_id in self.poll_configs.keys():
+                self.tree.clear_commands(guild=discord.Object(id=guild_id))
+            
+            # Only sync global commands at this point
             await self.safe_sync_commands()
-            logger.info("Initialized command tree")
+            
+            logger.info("Cleared all commands before setup")
             
             # Ensure guilds and admin roles are set up
             async with self.db() as session:
@@ -188,29 +197,20 @@ class PollBot(commands.Bot):
                 
                 await session.commit()
             
-            # List of extensions to load
+            # Load extensions sequentially with delay between each to avoid rate limits
             extensions = [
-                'src.bot.cogs.poll_commands',
-                'src.bot.cogs.dashboard_commands',
-                'src.bot.cogs.help_commands'
+                "src.bot.cogs.poll_commands",
+                "src.bot.cogs.dashboard_commands",
+                "src.bot.cogs.help_commands"
             ]
             
             for extension in extensions:
                 try:
                     logger.info(f"Loading extension: {extension}")
-                    # Get command tree state before loading
-                    global_cmds = self.tree.get_commands()
-                    logger.info(f"Command tree before loading {extension}: {[cmd.name for cmd in global_cmds]}")
-                    
-                    # Load the extension
+                    logger.info(f"Command tree before loading {extension}: {[cmd.name for cmd in self.tree.get_commands()]}")
                     await self.load_extension(extension)
-                    
-                    # Get command tree state after loading
-                    global_cmds = self.tree.get_commands()
-                    logger.info(f"Command tree after loading {extension}: {[cmd.name for cmd in global_cmds]}")
-                    
-                    # Add delay between extension loads
-                    await asyncio.sleep(2)
+                    logger.info(f"Command tree after loading {extension}: {[cmd.name for cmd in self.tree.get_commands()]}")
+                    await asyncio.sleep(2)  # Add delay between extension loads
                 except Exception as e:
                     logger.error(f"Failed to load extension {extension}: {e}")
                     raise
@@ -219,117 +219,41 @@ class PollBot(commands.Bot):
             self.loop.create_task(self._periodic_guild_sync())
             
             logger.info("Bot setup completed successfully")
-            global_cmds = self.tree.get_commands()
-            logger.info(f"Final command tree state: {[cmd.name for cmd in global_cmds]}")
-            
-            # Log configured guilds
-            for guild_id, configs in self.poll_configs.items():
-                guild_obj = discord.Object(id=int(guild_id))
-                guild_cmds = self.tree.get_commands(guild=guild_obj)
-                logger.info(f"Commands for guild {guild_id}: {[cmd.name for cmd in guild_cmds]}")
-                
+            logger.info(f"Final command tree state: {[cmd.name for cmd in self.tree.get_commands()]}")
         except Exception as e:
             logger.error(f"Error in setup: {e}", exc_info=True)
             raise
             
     async def _periodic_guild_sync(self):
-        """Periodically try to sync commands for rate-limited guilds."""
-        # Wait for bot to be ready
+        """Periodically attempt to sync commands for rate-limited guilds."""
         await self.wait_until_ready()
-        
-        # Track rate-limited guilds that need retry
-        self.rate_limited_guilds = {}
-        
         while not self.is_closed():
-            try:
-                # Check if there are any guilds that need to be synced
-                current_time = time.time()
-                guilds_to_sync = []
-                
-                for guild_id, retry_time in list(self.rate_limited_guilds.items()):
-                    if current_time >= retry_time:
-                        guilds_to_sync.append(guild_id)
-                        del self.rate_limited_guilds[guild_id]
-                
-                # Sync commands for each guild that needs it
-                for guild_id in guilds_to_sync:
-                    try:
-                        guild = discord.Object(id=int(guild_id))
-                        logger.info(f"Retrying command sync for rate-limited guild {guild_id}")
-                        await self.tree.sync(guild=guild)
-                        logger.info(f"Successfully synced commands for previously rate-limited guild {guild_id}")
-                    except discord.HTTPException as e:
-                        if e.status == 429:  # Rate limit error
-                            retry_after = e.retry_after or 300  # Default to 5 minutes if not specified
-                            self.rate_limited_guilds[guild_id] = current_time + retry_after
-                            logger.warning(f"Still rate-limited for guild {guild_id}, will retry in {retry_after} seconds")
-                        else:
-                            logger.error(f"Failed to sync commands for guild {guild_id}: {e}")
-                    except Exception as e:
-                        logger.error(f"Unexpected error syncing commands for guild {guild_id}: {e}")
-                
-                # Wait before checking again
-                await asyncio.sleep(60)  # Check every minute
-            except Exception as e:
-                logger.error(f"Error in periodic guild sync: {e}")
-                await asyncio.sleep(300)  # Wait 5 minutes on error before retrying
+            if self.rate_limited_guilds:
+                logger.info(f"Attempting to sync {len(self.rate_limited_guilds)} rate-limited guilds")
+                guilds_to_retry = list(self.rate_limited_guilds)
+                for guild_id in guilds_to_retry:
+                    guild = discord.Object(id=guild_id)
+                    success = await self.safe_sync_commands(guild=guild)
+                    if success:
+                        logger.info(f"Successfully synced previously rate-limited guild {guild_id}")
+                    # Add significant delay between guild syncs
+                    await asyncio.sleep(60)
+            # Check every 15 minutes
+            await asyncio.sleep(900)
 
     async def on_ready(self):
         """Called when the bot is ready."""
-        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        logger.info(f"Connected to {len(self.guilds)} guilds")
+        logger.info(f"Logged in as {self.user.name}")
+        logger.info(f"Bot ID: {self.user.id}")
+        logger.info(f"Using {self.shard_count} shard(s)")
+        logger.info("Connected to guilds:")
         
-        # Run diagnostics on command registration
-        self.loop.create_task(self._run_command_diagnostics())
-        
-        await self.change_presence(activity=discord.Game(name="Collecting votes"))
-        
-    async def _run_command_diagnostics(self):
-        """Diagnose command registration issues."""
-        await self.wait_until_ready()
-        
-        try:
-            logger.info("=== COMMAND REGISTRATION DIAGNOSTICS ===")
-            
-            # Check global commands
-            global_cmds = self.tree.get_commands()
-            app_commands = await self.tree.fetch_commands()
-            
-            logger.info(f"LOCAL GLOBAL COMMANDS: {len(global_cmds)}")
-            for cmd in global_cmds:
-                logger.info(f"  - {cmd.name} (type: {cmd.__class__.__name__})")
-            
-            logger.info(f"REGISTERED GLOBAL COMMANDS: {len(app_commands)}")
-            for cmd in app_commands:
-                logger.info(f"  - {cmd.name} (id: {cmd.id})")
-            
-            # Check guild commands
-            for guild_id, configs in self.poll_configs.items():
-                try:
-                    guild = discord.Object(id=int(guild_id))
-                    
-                    # Local commands
-                    local_guild_cmds = self.tree.get_commands(guild=guild)
-                    logger.info(f"LOCAL COMMANDS FOR GUILD {guild_id}: {len(local_guild_cmds)}")
-                    for cmd in local_guild_cmds:
-                        logger.info(f"  - {cmd.name} (type: {cmd.__class__.__name__})")
-                    
-                    # Registered commands
-                    try:
-                        registered_guild_cmds = await self.tree.fetch_commands(guild=guild)
-                        logger.info(f"REGISTERED COMMANDS FOR GUILD {guild_id}: {len(registered_guild_cmds)}")
-                        for cmd in registered_guild_cmds:
-                            logger.info(f"  - {cmd.name} (id: {cmd.id})")
-                    except discord.HTTPException as e:
-                        logger.error(f"Could not fetch registered commands for guild {guild_id}: {e}")
-                        
-                except Exception as e:
-                    logger.error(f"Error checking commands for guild {guild_id}: {e}")
-            
-            logger.info("=== END COMMAND REGISTRATION DIAGNOSTICS ===")
-            
-        except Exception as e:
-            logger.error(f"Error in command diagnostics: {e}", exc_info=True)
+        for guild in self.guilds:
+            logger.info(f"- {guild.name} (ID: {guild.id})")
+            if guild.id in self.poll_configs:
+                logger.info(f"  Found {len(self.poll_configs[guild.id])} poll configurations")
+            else:
+                logger.warning(f"  No poll configurations found for this guild")
 
 async def main():
     args = parse_args()

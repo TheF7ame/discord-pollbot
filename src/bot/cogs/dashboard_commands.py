@@ -4,13 +4,10 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 import asyncio
-import datetime
 
 from src.database.database import get_session
 from src.services.points_service import PointsService
 from src.utils.exceptions import PointsError
-from src.services.poll_service import PollService
-from src.views.dashboard_view import DashboardView
 
 logger = logging.getLogger(__name__)
 
@@ -18,181 +15,420 @@ logger = logging.getLogger(__name__)
 class DashboardCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._register_task = None
+        self.logger = logging.getLogger(__name__)
 
     async def cog_load(self):
-        """Register dashboard commands when the cog is loaded."""
-        self._register_task = self.bot.loop.create_task(self._register_commands())
-        
-    async def cog_unload(self):
-        # Cancel the registration task if it's still running
-        if self._register_task and not self._register_task.done():
-            self._register_task.cancel()
-            
-    async def _register_commands(self):
-        """Register all dashboard commands with proper error handling."""
+        """Called when the cog is loaded. Register all dashboard commands."""
         try:
-            logger.info("Registering dashboard commands")
+            self.logger.info("Registering dashboard commands for each guild and poll type...")
             
             # Process one guild at a time to avoid rate limits
             for guild_id, configs in self.bot.poll_configs.items():
-                try:
-                    guild = discord.Object(id=int(guild_id))
+                guild = discord.Object(id=guild_id)
+                self.logger.info(f"Processing dashboard commands for guild {guild_id}")
+                
+                # Register all commands for this guild at once to minimize API calls
+                commands_added = False
+                
+                for config in configs:
+                    poll_type = config.poll_type
+                    self.logger.info(f"Registering dashboard command for poll type: {poll_type}")
                     
-                    # Log existing commands before we add new ones
-                    existing_cmds = self.bot.tree.get_commands(guild=guild)
-                    logger.info(f"Guild {guild_id} has {len(existing_cmds)} commands before adding dashboard commands")
+                    # Create dashboard command with poll_type properly bound
+                    dashboard_cmd = self._create_dashboard_command(poll_type)
                     
-                    added = False
+                    # Add command to the tree
+                    self.bot.tree.add_command(dashboard_cmd, guild=guild)
+                    commands_added = True
+                
+                # Only sync if we actually added commands
+                if commands_added:
+                    # Use the safer sync method
+                    success = await self.bot.safe_sync_commands(guild=guild)
+                    if success:
+                        self.logger.info(f"Synced dashboard commands for guild {guild_id}")
                     
-                    # Register a dashboard command for each poll type in this guild
-                    for config in configs:
-                        poll_type = config.poll_type
-                        command_name = f"dashboard_{poll_type}"
-                        
-                        logger.info(f"Registering dashboard command for poll type '{poll_type}' in guild {guild_id}")
-                        
-                        # Create and register the dashboard command
-                        dashboard_cmd = app_commands.Command(
-                            name=command_name,
-                            description=f"Show the dashboard for {poll_type} polls",
-                            callback=self._dashboard_callback,
-                            guild_ids=[int(guild_id)],
-                        )
-                        
-                        # Restrict to users with appropriate admin role
-                        dashboard_cmd.add_check(self._check_admin_role)
-                        
-                        # Add the command to the bot's command tree
-                        self.bot.tree.add_command(dashboard_cmd, guild=guild)
-                        logger.info(f"Added {command_name} command to guild {guild_id}")
-                        added = True
-                    
-                    # Sync commands if we added any
-                    if added:
-                        # Verify the commands were added to the command tree
-                        cmds_to_sync = self.bot.tree.get_commands(guild=guild)
-                        logger.info(f"Commands to sync for guild {guild_id}: {[cmd.name for cmd in cmds_to_sync]}")
-                        
-                        # Sync the commands
-                        logger.info(f"Syncing commands for guild {guild_id}")
-                        await self.bot.safe_sync_commands(guild=guild)
-                        
-                        # Add delay between guild syncs
-                        await asyncio.sleep(2)
-                    else:
-                        logger.warning(f"No dashboard commands were added for guild {guild_id}")
-                        
-                except Exception as e:
-                    logger.error(f"Error registering dashboard commands for guild {guild_id}: {e}", exc_info=True)
+                    # Always add a delay between guild syncs regardless of success
+                    await asyncio.sleep(5)
             
-            logger.info("Dashboard command registration completed")
+            self.logger.info("Dashboard commands registration process completed")
             
         except Exception as e:
-            logger.error(f"Error in dashboard command registration: {e}", exc_info=True)
+            self.logger.error(f"Error registering dashboard commands: {e}", exc_info=True)
+            raise
             
-    async def _check_admin_role(self, interaction: discord.Interaction) -> bool:
-        """Check if user has admin role for the poll type."""
-        # Extract poll type from command name (e.g., 'dashboard_election' -> 'election')
-        cmd_parts = interaction.command.name.split('_')
-        if len(cmd_parts) < 2:
-            return False
+    def _create_dashboard_command(self, poll_type):
+        """Create a dashboard command with the poll_type properly bound."""
+        @app_commands.command(
+            name=f"dashboard_{poll_type}",
+            description=f"Show the {poll_type} leaderboard"
+        )
+        @app_commands.guild_only()
+        async def dashboard(interaction: discord.Interaction):
+            # The poll_type is properly bound from the outer function
+            await self._show_dashboard(interaction, poll_type)
             
-        poll_type = cmd_parts[1]
-        
-        # Get the admin role for this poll type
-        guild_id = str(interaction.guild_id)
-        if guild_id not in self.bot.poll_configs:
-            logger.warning(f"No poll configs found for guild {guild_id}")
-            return False
-            
-        # Find config for this poll type
-        admin_role_id = None
-        for config in self.bot.poll_configs[guild_id]:
-            if config.poll_type == poll_type:
-                admin_role_id = config.admin_role_id
-                break
-                
-        if not admin_role_id:
-            logger.warning(f"No admin role found for poll type {poll_type} in guild {guild_id}")
-            return False
-            
-        # Check if user has the role
-        member = interaction.user
-        if not isinstance(member, discord.Member):
-            return False
-            
-        admin_role = discord.utils.get(member.roles, id=admin_role_id)
-        return admin_role is not None
-        
-    async def _dashboard_callback(self, interaction: discord.Interaction):
-        """Generic callback for dashboard commands."""
-        # Extract poll type from command name (e.g., 'dashboard_election' -> 'election')
-        poll_type = interaction.command.name.split('_')[1]
-        logger.info(f"Dashboard callback invoked for poll type: {poll_type}")
-        
-        # Forward to actual implementation
-        await self.dashboard(interaction, poll_type)
+        return dashboard
 
-    async def dashboard(self, interaction: discord.Interaction, poll_type: str):
-        """Show the dashboard/leaderboard for a specific poll type."""
+    async def _show_dashboard(self, interaction: discord.Interaction, poll_type: str):
+        """Show the dashboard for a specific poll type."""
+        self.logger.info(f"Dashboard command called by {interaction.user} ({interaction.user.id})")
+        self.logger.info(f"Guild ID: {interaction.guild_id}, Poll Type: {poll_type}")
+        
+        # Defer response since we'll be doing database operations
+        await interaction.response.defer(ephemeral=True)
+        
         try:
-            logger.info(f"Showing dashboard for poll type: {poll_type} in guild {interaction.guild_id}")
-            
-            await interaction.response.defer(ephemeral=True)
-            
             async with self.bot.db() as session:
-                poll_service = PollService(session)
-                polls = await poll_service.get_all_polls_by_type(
+                from sqlalchemy import select, and_
+                from src.database.models import Poll, PollOption, PollStatus, Vote, UserPollSelection
+                
+                points_service = PointsService(session)
+                
+                # Get user's personal stats for this poll type
+                user_points = await points_service.get_user_poll_type_points(
                     guild_id=interaction.guild_id,
-                    poll_type=poll_type
+                    poll_type=poll_type,
+                    user_id=str(interaction.user.id)
                 )
                 
-                if not polls:
-                    await interaction.followup.send(f"No {poll_type} polls found.", ephemeral=True)
-                    return
-                
-                # Create an embed for the dashboard
-                embed = discord.Embed(
-                    title=f"{poll_type.capitalize()} Dashboard",
-                    description=f"Overview of all {poll_type} polls in this server.",
-                    color=discord.Color.blue()
+                # ----- NEW CODE: Get active poll info -----
+                # First check if there's an active poll for this type
+                active_poll_stmt = select(Poll).where(
+                    and_(
+                        Poll.guild_id == interaction.guild_id,
+                        Poll.poll_type == poll_type,
+                        Poll.is_active == True,  # Explicitly check is_active
+                        Poll.is_revealed == False  # Make sure it's not revealed
+                    )
                 )
+                result = await session.execute(active_poll_stmt)
+                active_poll = result.scalar_one_or_none()
                 
-                # Active polls
-                active_polls = [p for p in polls if p.status == "active"]
-                if active_polls:
-                    active_text = "\n".join([f"• **{p.title}** (ID: {p.id})" for p in active_polls[:5]])
-                    if len(active_polls) > 5:
-                        active_text += f"\n... and {len(active_polls) - 5} more"
-                    embed.add_field(name="Active Polls", value=active_text, inline=False)
+                # If no active poll, check for closed but not revealed polls (users are waiting for results)
+                if not active_poll:
+                    self.logger.info(f"No active poll found, checking for closed but not revealed polls")
+                    closed_not_revealed_stmt = select(Poll).where(
+                        and_(
+                            Poll.guild_id == interaction.guild_id,
+                            Poll.poll_type == poll_type,
+                            Poll.is_active == False,  # Closed
+                            Poll.is_revealed == False  # Not revealed
+                        )
+                    ).order_by(Poll.created_at.desc()).limit(1)  # Get the most recent one
+                    
+                    result = await session.execute(closed_not_revealed_stmt)
+                    active_poll = result.scalar_one_or_none()  # Reuse the active_poll variable
+                
+                # Print debug info to logs
+                if active_poll:
+                    self.logger.info(f"Found poll for current section: {active_poll.id}, question: {active_poll.question}, is_active: {active_poll.is_active}")
                 else:
-                    embed.add_field(name="Active Polls", value="No active polls", inline=False)
+                    self.logger.info(f"No active or pending polls found for {poll_type}")
                 
-                # Closed polls
-                closed_polls = [p for p in polls if p.status == "closed"]
-                if closed_polls:
-                    closed_text = "\n".join([f"• **{p.title}** (ID: {p.id})" for p in closed_polls[:5]])
-                    if len(closed_polls) > 5:
-                        closed_text += f"\n... and {len(closed_polls) - 5} more"
-                    embed.add_field(name="Closed Polls", value=closed_text, inline=False)
+                # Find the last revealed poll
+                last_poll_stmt = select(Poll).where(
+                    and_(
+                        Poll.guild_id == interaction.guild_id,
+                        Poll.poll_type == poll_type,
+                        Poll.is_revealed == True,  # Only get revealed polls
+                        Poll.id != (active_poll.id if active_poll else -1)  # Exclude active poll
+                    )
+                ).order_by(Poll.created_at.desc()).limit(1)
                 
-                # Some stats
-                embed.add_field(name="Total Polls", value=str(len(polls)), inline=True)
-                embed.add_field(name="Active", value=str(len(active_polls)), inline=True)
-                embed.add_field(name="Closed", value=str(len(closed_polls)), inline=True)
+                result = await session.execute(last_poll_stmt)
+                last_poll = result.scalar_one_or_none()
                 
-                # Add timestamp
-                embed.timestamp = datetime.datetime.now()
+                # Build the dashboard message
+                message_parts = []
                 
-                # Create action row with buttons for managing polls
-                view = DashboardView(self.bot, poll_type, interaction.user.id)
+                # Format personal stats
+                if user_points:
+                    personal_stats = (
+                        f"**Your Stats ({poll_type})**\n"
+                        f"Points: {user_points.points}\n"
+                        f"Successful Polls: {user_points.total_correct}\n"
+                        f"Rank: {self._get_medal(user_points.rank)} #{user_points.rank}\n\n"
+                        f"*Points are earned by selecting correct options (1 point per correct option).\n"
+                        f"'Successful Polls' counts how many polls you got at least one correct answer in.*\n\n"
+                    )
+                else:
+                    personal_stats = f"**Your Stats ({poll_type})**\nYou haven't participated in any polls yet.\n\n"
                 
-                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                message_parts.append(personal_stats)
                 
+                # ----- Format active poll info (if exists) -----
+                if active_poll:
+                    # Get the options for this poll
+                    options_stmt = select(PollOption).where(PollOption.poll_id == active_poll.id).order_by(PollOption.index)
+                    result = await session.execute(options_stmt)
+                    options = {opt.index: opt.text for opt in result.scalars().all()}
+                    
+                    # Check if user has voted on this poll
+                    user_vote_stmt = select(Vote).where(
+                        and_(
+                            Vote.poll_id == active_poll.id,
+                            Vote.user_id == str(interaction.user.id)
+                        )
+                    )
+                    result = await session.execute(user_vote_stmt)
+                    user_vote = result.scalar_one_or_none()
+                    
+                    # If no vote in Vote table, check UserPollSelection table
+                    if not user_vote:
+                        user_selection_stmt = select(UserPollSelection).where(
+                            and_(
+                                UserPollSelection.poll_id == active_poll.id,
+                                UserPollSelection.user_id == str(interaction.user.id)
+                            )
+                        )
+                        result = await session.execute(user_selection_stmt)
+                        user_selection = result.scalar_one_or_none()
+                    else:
+                        user_selection = None
+                    
+                    active_poll_info = f"**Current Poll: {active_poll.question}**\n"
+                    
+                    # Define emoji letters (A-Z)
+                    emoji_letters = [chr(ord('🇦') + i) for i in range(26)]
+                    
+                    if user_vote:
+                        # User has voted in Vote table
+                        selected_options = []
+                        for idx in user_vote.option_ids:
+                            # Convert idx to int
+                            try:
+                                idx_int = int(idx)
+                                if idx_int in options:
+                                    letter = emoji_letters[idx_int] if idx_int < 26 else f"#{idx_int+1}"
+                                    selected_options.append(f"{letter} {options[idx_int]}")
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        if selected_options:
+                            active_poll_info += "Your selections:\n- " + "\n- ".join(selected_options) + "\n\n"
+                        else:
+                            active_poll_info += "You have voted, but there was an issue displaying your selections.\n\n"
+                    elif user_selection and user_selection.selections:
+                        # User has voted in UserPollSelection table
+                        selected_options = []
+                        for idx in user_selection.selections:
+                            # Convert idx to int
+                            try:
+                                idx_int = int(idx)
+                                if idx_int in options:
+                                    letter = emoji_letters[idx_int] if idx_int < 26 else f"#{idx_int+1}"
+                                    selected_options.append(f"{letter} {options[idx_int]}")
+                            except (ValueError, TypeError):
+                                continue
+                                
+                        if selected_options:
+                            active_poll_info += "Your selections:\n- " + "\n- ".join(selected_options) + "\n\n"
+                        else:
+                            active_poll_info += "You have voted, but there was an issue displaying your selections.\n\n"
+                    else:
+                        # User hasn't voted
+                        active_poll_info += "You haven't made a choice for this poll yet.\n\n"
+                    
+                    # Add status information if poll is not active
+                    if not active_poll.is_active:
+                        active_poll_info += "*This poll is closed and awaiting results*\n\n"
+                        
+                    message_parts.append(active_poll_info)
+                else:
+                    # No active poll
+                    message_parts.append(f"**Current Poll: No active or pending polls found for {poll_type}**\n\n")
+                
+                # ----- Format last poll info (if exists) -----
+                if last_poll:
+                    # Get the options for this poll
+                    options_stmt = select(PollOption).where(PollOption.poll_id == last_poll.id).order_by(PollOption.index)
+                    result = await session.execute(options_stmt)
+                    options = {opt.index: opt.text for opt in result.scalars().all()}
+                    
+                    # Check if user has voted on this poll
+                    user_vote_stmt = select(Vote).where(
+                        and_(
+                            Vote.poll_id == last_poll.id,
+                            Vote.user_id == str(interaction.user.id)
+                        )
+                    )
+                    result = await session.execute(user_vote_stmt)
+                    user_vote = result.scalar_one_or_none()
+                    
+                    # If no vote in Vote table, check UserPollSelection table
+                    if not user_vote:
+                        user_selection_stmt = select(UserPollSelection).where(
+                            and_(
+                                UserPollSelection.poll_id == last_poll.id,
+                                UserPollSelection.user_id == str(interaction.user.id)
+                            )
+                        )
+                        result = await session.execute(user_selection_stmt)
+                        user_selection = result.scalar_one_or_none()
+                    else:
+                        user_selection = None
+                    
+                    last_poll_info = f"**Last Poll: {last_poll.question}**\n"
+                    
+                    # Define emoji letters (A-Z)
+                    emoji_letters = [chr(ord('🇦') + i) for i in range(26)]
+                    
+                    # If poll is revealed, show correct answers
+                    if last_poll.is_revealed:
+                        # Get and format correct answers
+                        if last_poll.correct_answers:
+                            correct_options = []
+                            for idx in last_poll.correct_answers:
+                                # Convert idx to int if it's a string
+                                try:
+                                    idx_int = int(idx) if isinstance(idx, str) else idx
+                                    if idx_int in options:
+                                        letter = emoji_letters[idx_int] if idx_int < 26 else f"#{idx_int+1}"
+                                        correct_options.append(f"{letter} {options[idx_int]}")
+                                except (ValueError, TypeError):
+                                    continue
+                                
+                            if correct_options:
+                                last_poll_info += "Correct answers:\n- " + "\n- ".join(correct_options) + "\n\n"
+                            else:
+                                last_poll_info += "No valid correct answers were found for this poll.\n\n"
+                        else:
+                            last_poll_info += "No correct answers were specified for this poll.\n\n"
+                        
+                        # If user participated, show their selections and points
+                        has_participated = False
+                        user_selections = []
+                        
+                        if user_vote:
+                            has_participated = True
+                            user_selections = user_vote.option_ids
+                        elif user_selection and user_selection.selections:
+                            has_participated = True
+                            user_selections = user_selection.selections
+                            
+                        if has_participated:
+                            # Format user's selections
+                            selected_options = []
+                            for idx in user_selections:
+                                # Convert idx to int
+                                try:
+                                    idx_int = int(idx) if isinstance(idx, str) else idx
+                                    if idx_int in options:
+                                        letter = emoji_letters[idx_int] if idx_int < 26 else f"#{idx_int+1}"
+                                        selected_options.append(f"{letter} {options[idx_int]}")
+                                except (ValueError, TypeError):
+                                    continue
+                                    
+                            if selected_options:
+                                last_poll_info += "Your selections:\n- " + "\n- ".join(selected_options) + "\n\n"
+                            
+                            # Calculate points user got from this poll
+                            if last_poll.correct_answers:
+                                # Convert to sets of strings for consistent comparison
+                                correct_set = set(str(x) for x in last_poll.correct_answers)
+                                user_set = set(str(x) for x in user_selections)
+                                
+                                # Calculate points - number of correct selections
+                                points = len(user_set & correct_set)
+                                last_poll_info += f"Points earned: {points}\n\n"
+                    else:
+                        # Poll not revealed yet
+                        last_poll_info += "Results not revealed yet.\n\n"
+                        
+                        # If user participated, show their selections
+                        has_participated = False
+                        user_selections = []
+                        
+                        if user_vote:
+                            has_participated = True
+                            user_selections = user_vote.option_ids
+                        elif user_selection and user_selection.selections:
+                            has_participated = True
+                            user_selections = user_selection.selections
+                            
+                        if has_participated:
+                            # Format user's selections
+                            selected_options = []
+                            for idx in user_selections:
+                                # Convert idx to int
+                                try:
+                                    idx_int = int(idx) if isinstance(idx, str) else idx
+                                    if idx_int in options:
+                                        letter = emoji_letters[idx_int] if idx_int < 26 else f"#{idx_int+1}"
+                                        selected_options.append(f"{letter} {options[idx_int]}")
+                                except (ValueError, TypeError):
+                                    continue
+                                    
+                            if selected_options:
+                                last_poll_info += "Your selections:\n- " + "\n- ".join(selected_options) + "\n\n"
+                        else:
+                            last_poll_info += "You didn't participate in this poll.\n\n"
+                    
+                    message_parts.append(last_poll_info)
+                else:
+                    # No last revealed poll
+                    message_parts.append(f"**Last Poll: No revealed polls found for {poll_type}**\n\n")
+                
+                # Get leaderboard for this poll type
+                leaderboard = await points_service.get_poll_type_leaderboard(
+                    guild_id=interaction.guild_id,
+                    poll_type=poll_type,
+                    limit=10
+                )
+                
+                # Format leaderboard
+                if leaderboard:
+                    leaderboard_text = f"**{poll_type.upper()} Leaderboard**\n"
+                    
+                    for entry in leaderboard:
+                        # Handle both object and dictionary access
+                        if hasattr(entry, 'user_id'):
+                            # It's an object
+                            user_id = entry.user_id
+                            points = entry.points
+                            rank = entry.rank
+                            total_correct = getattr(entry, 'total_correct', 0)
+                        else:
+                            # It's a dictionary
+                            user_id = entry['user_id']
+                            points = entry['points']
+                            rank = entry['rank']
+                            total_correct = entry.get('total_correct', 0)
+                        
+                        # Try to get the user's display name
+                        try:
+                            user = await self.bot.fetch_user(int(user_id))
+                            username = user.display_name
+                        except:
+                            # Fallback to just showing user ID
+                            username = f"User {user_id}"
+                            
+                        medal = self._get_medal(rank)
+                        leaderboard_text += f"{medal} **#{rank}** {username}: {points} points"
+                        
+                        # Add success rate if available
+                        if hasattr(entry, 'total_correct') and entry.total_correct > 0:
+                            leaderboard_text += f" ({total_correct} successful polls)"
+                            
+                        leaderboard_text += "\n"
+                    
+                    message_parts.append(leaderboard_text)
+                else:
+                    message_parts.append("No one has earned points yet.")
+                
+                # Send combined message
+                await interaction.followup.send(
+                    "\n".join(message_parts),
+                    ephemeral=True
+                )
+                    
         except Exception as e:
-            logger.error(f"Error showing dashboard: {e}", exc_info=True)
-            await interaction.followup.send("An error occurred while showing the dashboard.", ephemeral=True)
+            self.logger.error(f"Error in dashboard command: {e}", exc_info=True)
+            await interaction.followup.send(
+                f"An error occurred: {str(e)}",
+                ephemeral=True
+            )
 
     def _get_medal(self, rank: int) -> str:
         """Return the appropriate medal emoji for a rank."""

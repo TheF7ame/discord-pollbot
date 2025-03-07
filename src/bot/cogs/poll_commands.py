@@ -19,107 +19,99 @@ from src.utils.exceptions import PollError
 logger = logging.getLogger(__name__)
 
 class PollCommands(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.poll_type_groups = {}
-        self._register_task = None
+        self.logger = logging.getLogger(__name__)
+        self.poll_update_tasks = {}
+        self._update_active_polls.start()  # Start the background task
+        self._check_expired_polls.start()  # Start the task that checks for expired polls
 
     async def cog_load(self):
-        # Use a simple approach - register commands on load
-        self._register_task = self.bot.loop.create_task(self._register_commands())
+        """Called when the cog is loaded. Register all poll type specific commands."""
+        self.logger.info("Loading PollCommands cog")
         
-    async def cog_unload(self):
-        # Cancel the registration task if it's still running
-        if self._register_task and not self._register_task.done():
-            self._register_task.cancel()
-
-    async def _register_commands(self):
-        """Register all poll commands with proper error handling."""
+        # Make sure the background tasks have started
+        if not self._update_active_polls.is_running():
+            self._update_active_polls.start()
+            self.logger.info("Started _update_active_polls task")
+        if not self._check_expired_polls.is_running():
+            self._check_expired_polls.start()
+            self.logger.info("Started _check_expired_polls task")
+        
+        # Continue with delayed command registration to avoid blocking startup
+        self.bot.loop.create_task(self._register_commands_delayed())
+        self.logger.info("Scheduled command registration to run in background")
+    
+    async def _register_commands_delayed(self):
+        """Register commands with a delay to avoid blocking bot startup."""
         try:
-            logger.info("Registering poll commands")
+            # Wait for the bot to fully initialize before registering commands
+            await asyncio.sleep(5)
+            self.logger.info("Starting background command registration...")
             
-            # Process one guild at a time to avoid rate limits
+            # Ensure the tree is synced with our commands
+            try:
+                await self.bot.safe_sync_commands()
+                self.logger.info("Command tree synced successfully")
+            except Exception as e:
+                self.logger.error(f"Error syncing global commands: {e}")
+            
+            self.logger.info("Registering poll commands for each guild and poll type...")
+            
+            # Log initial command tree state
+            self.logger.info(f"Initial command tree commands: {[cmd.name for cmd in self.bot.tree.get_commands()]}")
+            
+            # Register commands for each guild and poll type
             for guild_id, configs in self.bot.poll_configs.items():
                 try:
                     guild = discord.Object(id=int(guild_id))
-                    guild_commands_added = False
+                    self.logger.info(f"Processing commands for guild {guild_id}")
                     
-                    # Log existing commands before we add new ones
-                    existing_cmds = self.bot.tree.get_commands(guild=guild)
-                    logger.info(f"Guild {guild_id} has {len(existing_cmds)} commands before adding poll commands")
+                    # Register all commands at once for this guild to minimize API calls
+                    commands_registered = False
                     
-                    # Add each poll type's commands
                     for config in configs:
-                        poll_type = config.poll_type
-                        logger.info(f"Registering commands for poll type '{poll_type}' in guild {guild_id}")
-                        
-                        # Register the create poll command for this poll type
-                        create_cmd = app_commands.Command(
-                            name=f"create_{poll_type}_poll",
-                            description=f"Create a new {poll_type} poll",
-                            callback=self._create_poll_callback,
-                            guild_ids=[int(guild_id)],
-                        )
-                        create_cmd.add_check(self._check_admin_role)
-                        self.bot.tree.add_command(create_cmd, guild=guild)
-                        logger.info(f"Added create_{poll_type}_poll command to guild {guild_id}")
-                        
-                        # Register the close poll command for this poll type
-                        close_cmd = app_commands.Command(
-                            name=f"close_{poll_type}_poll",
-                            description=f"Close a {poll_type} poll",
-                            callback=self._close_poll_callback,
-                            guild_ids=[int(guild_id)],
-                        )
-                        close_cmd.add_check(self._check_admin_role)
-                        self.bot.tree.add_command(close_cmd, guild=guild)
-                        logger.info(f"Added close_{poll_type}_poll command to guild {guild_id}")
-                        
-                        # Register the reveal poll command for this poll type
-                        reveal_cmd = app_commands.Command(
-                            name=f"reveal_{poll_type}_poll",
-                            description=f"Reveal a {poll_type} poll's results",
-                            callback=self._reveal_poll_callback,
-                            guild_ids=[int(guild_id)],
-                        )
-                        reveal_cmd.add_check(self._check_admin_role)
-                        self.bot.tree.add_command(reveal_cmd, guild=guild)
-                        logger.info(f"Added reveal_{poll_type}_poll command to guild {guild_id}")
-                        
-                        # Register the vote command for this poll type
-                        vote_cmd = app_commands.Command(
-                            name=f"vote_{poll_type}",
-                            description=f"Vote in a {poll_type} poll",
-                            callback=self._vote_callback,
-                            guild_ids=[int(guild_id)],
-                        )
-                        self.bot.tree.add_command(vote_cmd, guild=guild)
-                        logger.info(f"Added vote_{poll_type} command to guild {guild_id}")
-                        
-                        guild_commands_added = True
-                        
-                    # Check if we have commands to sync and sync them
-                    if guild_commands_added:
-                        # Verify the commands were added to the command tree
-                        cmds_to_sync = self.bot.tree.get_commands(guild=guild)
-                        logger.info(f"Commands to sync for guild {guild_id}: {[cmd.name for cmd in cmds_to_sync]}")
-                        
-                        # Sync the commands
-                        logger.info(f"Syncing {len(cmds_to_sync)} commands for guild {guild_id}")
-                        await self.bot.safe_sync_commands(guild=guild)
-                        
-                        # Add small delay between guild syncs to avoid rate limits
-                        await asyncio.sleep(2)
-                    else:
-                        logger.warning(f"No poll commands were added for guild {guild_id}")
-                        
-                except Exception as e:
-                    logger.error(f"Error registering commands for guild {guild_id}: {e}", exc_info=True)
+                        try:
+                            poll_type = config.poll_type
+                            self.logger.info(f"Registering commands for poll type: {poll_type}")
+                            
+                            # Create command functions with poll_type properly bound
+                            create_poll_cmd = self._create_poll_command(poll_type)
+                            close_poll_cmd = self._close_poll_command(poll_type)
+                            reveal_poll_cmd = self._reveal_poll_command(poll_type)
+                            vote_cmd = self._vote_command(poll_type)
+                            
+                            # Add commands to the tree
+                            self.bot.tree.add_command(create_poll_cmd, guild=guild)
+                            self.bot.tree.add_command(close_poll_cmd, guild=guild)
+                            self.bot.tree.add_command(reveal_poll_cmd, guild=guild)
+                            self.bot.tree.add_command(vote_cmd, guild=guild)
+                            commands_registered = True
+                        except Exception as cmd_error:
+                            self.logger.error(f"Error registering commands for poll type {poll_type}: {cmd_error}", exc_info=True)
+                            # Continue with other poll types even if one fails
+                            continue
+                    
+                    # Only sync if we actually registered commands
+                    if commands_registered:
+                        # Use the safe sync method
+                        success = await self.bot.safe_sync_commands(guild=guild)
+                        if success:
+                            self.logger.info(f"Synced commands for guild {guild_id}")
+                    
+                    # Add a delay between guild syncs regardless of success
+                    # Give a much longer delay to avoid rate limits
+                    await asyncio.sleep(10)
+                    
+                except Exception as guild_error:
+                    self.logger.error(f"Error processing guild {guild_id}: {guild_error}", exc_info=True)
+                    # Continue with other guilds even if one fails
+                    continue
             
-            logger.info("Poll command registration completed")
+            self.logger.info("Poll commands registration process completed")
             
         except Exception as e:
-            logger.error(f"Error in poll command registration: {e}", exc_info=True)
+            self.logger.error(f"Error registering poll commands: {e}", exc_info=True)
 
     async def _retry_sync_later(self, guild, delay):
         """Retry syncing commands for a guild after a delay."""
@@ -1397,79 +1389,6 @@ class PollCommands(commands.Cog):
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt
-
-    async def _check_admin_role(self, interaction: discord.Interaction) -> bool:
-        """Check if user has admin role for the poll type."""
-        # Extract poll type from command name (e.g., 'create_election_poll' -> 'election')
-        cmd_parts = interaction.command.name.split('_')
-        if len(cmd_parts) < 2:
-            return False
-            
-        poll_type = cmd_parts[1]
-        if cmd_parts[0] == "vote":
-            # Vote commands are public
-            return True
-            
-        # Get the admin role for this poll type
-        guild_id = str(interaction.guild_id)
-        if guild_id not in self.bot.poll_configs:
-            logger.warning(f"No poll configs found for guild {guild_id}")
-            return False
-            
-        # Find config for this poll type
-        admin_role_id = None
-        for config in self.bot.poll_configs[guild_id]:
-            if config.poll_type == poll_type:
-                admin_role_id = config.admin_role_id
-                break
-                
-        if not admin_role_id:
-            logger.warning(f"No admin role found for poll type {poll_type} in guild {guild_id}")
-            return False
-            
-        # Check if user has the role
-        member = interaction.user
-        if not isinstance(member, discord.Member):
-            return False
-            
-        admin_role = discord.utils.get(member.roles, id=admin_role_id)
-        return admin_role is not None
-
-    async def _create_poll_callback(self, interaction: discord.Interaction):
-        """Generic callback for creating a poll."""
-        # Extract poll type from command name (e.g., 'create_election_poll' -> 'election')
-        poll_type = interaction.command.name.split('_')[1]
-        logger.info(f"Create poll callback invoked for poll type: {poll_type}")
-        
-        # Forward to actual implementation
-        await self.create_poll(interaction, poll_type)
-        
-    async def _close_poll_callback(self, interaction: discord.Interaction):
-        """Generic callback for closing a poll."""
-        # Extract poll type from command name (e.g., 'close_election_poll' -> 'election')
-        poll_type = interaction.command.name.split('_')[1]
-        logger.info(f"Close poll callback invoked for poll type: {poll_type}")
-        
-        # Forward to actual implementation
-        await self.close_poll(interaction, poll_type)
-        
-    async def _reveal_poll_callback(self, interaction: discord.Interaction):
-        """Generic callback for revealing poll results."""
-        # Extract poll type from command name (e.g., 'reveal_election_poll' -> 'election')
-        poll_type = interaction.command.name.split('_')[1]
-        logger.info(f"Reveal poll callback invoked for poll type: {poll_type}")
-        
-        # Forward to actual implementation
-        await self.reveal_poll(interaction, poll_type)
-        
-    async def _vote_callback(self, interaction: discord.Interaction):
-        """Generic callback for voting in a poll."""
-        # Extract poll type from command name (e.g., 'vote_election' -> 'election')
-        poll_type = interaction.command.name.split('_')[1]
-        logger.info(f"Vote callback invoked for poll type: {poll_type}")
-        
-        # Forward to actual implementation
-        await self.vote(interaction, poll_type)
 
 async def setup(bot: commands.Bot):
     """Setup function for the poll commands cog."""
