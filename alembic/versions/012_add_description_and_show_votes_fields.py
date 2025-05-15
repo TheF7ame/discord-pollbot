@@ -18,18 +18,18 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add description column (nullable)
-    op.add_column('polls', sa.Column('description', sa.String(), nullable=True))
+    op.add_column('polls_polls', sa.Column('description', sa.String(), nullable=True))
     
     # Add show_votes_while_active column
-    op.add_column('polls', sa.Column('show_votes_while_active', sa.Boolean(), server_default='false', nullable=False))
+    op.add_column('polls_polls', sa.Column('show_votes_while_active', sa.Boolean(), server_default='false', nullable=False))
     
     # Create index for faster lookups
-    op.create_index('ix_polls_show_votes_while_active', 'polls', ['show_votes_while_active'])
+    op.create_index('ix_polls_polls_show_votes_while_active', 'polls_polls', ['show_votes_while_active'])
 
 def downgrade() -> None:
     # Drop the created index
-    op.drop_index('ix_polls_show_votes_while_active')
+    op.drop_index('ix_polls_polls_show_votes_while_active')
     
     # Drop the columns
-    op.drop_column('polls', 'show_votes_while_active')
-    op.drop_column('polls', 'description') 
+    op.drop_column('polls_polls', 'show_votes_while_active')
+    op.drop_column('polls_polls', 'description') 

@@ -16,11 +16,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add poll_type column
-    op.add_column('polls', sa.Column('poll_type', sa.String(), nullable=True))
+    op.add_column('polls_polls', sa.Column('poll_type', sa.String(), nullable=True))
     
     # Create index for faster lookups
-    op.create_index('ix_polls_poll_type', 'polls', ['poll_type'])
+    op.create_index('ix_polls_polls_poll_type', 'polls_polls', ['poll_type'])
 
 def downgrade() -> None:
-    op.drop_index('ix_polls_poll_type')
-    op.drop_column('polls', 'poll_type') 
+    op.drop_index('ix_polls_polls_poll_type')
+    op.drop_column('polls_polls', 'poll_type') 

@@ -21,12 +21,12 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Drop existing tables if they exist
     conn = op.get_bind()
-    conn.execute(sa.text('DROP TABLE IF EXISTS user_scores CASCADE'))
-    conn.execute(sa.text('DROP TABLE IF EXISTS user_poll_selections CASCADE'))
-    conn.execute(sa.text('DROP TABLE IF EXISTS poll_options CASCADE'))
-    conn.execute(sa.text('DROP TABLE IF EXISTS polls CASCADE'))
-    conn.execute(sa.text('DROP TABLE IF EXISTS poll_votes CASCADE'))
-    conn.execute(sa.text('DROP TABLE IF EXISTS users CASCADE'))
+    conn.execute(sa.text('DROP TABLE IF EXISTS polls_user_scores CASCADE'))
+    conn.execute(sa.text('DROP TABLE IF EXISTS polls_user_poll_selections CASCADE'))
+    conn.execute(sa.text('DROP TABLE IF EXISTS polls_poll_options CASCADE'))
+    conn.execute(sa.text('DROP TABLE IF EXISTS polls_polls CASCADE'))
+    conn.execute(sa.text('DROP TABLE IF EXISTS polls_poll_votes CASCADE'))
+    conn.execute(sa.text('DROP TABLE IF EXISTS polls_users CASCADE'))
     
     # Drop enum type if exists
     conn.execute(sa.text('DROP TYPE IF EXISTS pollstatus CASCADE'))
@@ -35,7 +35,7 @@ def upgrade() -> None:
     op.execute("CREATE TYPE pollstatus AS ENUM ('open', 'closed', 'revealed')")
     
     # Create polls table
-    op.create_table('polls',
+    op.create_table('polls_polls',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('question', sa.String(), nullable=False),
         sa.Column('creator_id', sa.Integer(), nullable=False),
@@ -50,28 +50,28 @@ def upgrade() -> None:
     )
     
     # Create poll_options table
-    op.create_table('poll_options',
+    op.create_table('polls_poll_options',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('poll_id', sa.Integer(), nullable=False),
         sa.Column('text', sa.String(), nullable=False),
-        sa.ForeignKeyConstraint(['poll_id'], ['polls.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['poll_id'], ['polls_polls.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     
     # Create user_poll_selections table
-    op.create_table('user_poll_selections',
+    op.create_table('polls_user_poll_selections',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('poll_id', sa.Integer(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('selections', postgresql.JSON(astext_type=sa.Text()), nullable=False),
         sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['poll_id'], ['polls.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['poll_id'], ['polls_polls.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     
     # Create user_scores table
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('guild_id', sa.Integer(), nullable=False),
@@ -85,8 +85,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table('user_scores')
-    op.drop_table('user_poll_selections')
-    op.drop_table('poll_options')
-    op.drop_table('polls')
+    op.drop_table('polls_user_scores')
+    op.drop_table('polls_user_poll_selections')
+    op.drop_table('polls_poll_options')
+    op.drop_table('polls_polls')
     op.execute('DROP TYPE pollstatus')

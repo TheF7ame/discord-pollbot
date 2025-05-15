@@ -16,17 +16,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Drop the user_scores table as it's no longer used
-    op.drop_table('user_scores')
+    # op.drop_table('polls_user_scores')
+    pass
 
 def downgrade() -> None:
     # Recreate the user_scores table in case of downgrade
-    op.create_table('user_scores',
-        sa.Column('user_id', sa.String(), nullable=False),
-        sa.Column('channel_id', sa.BigInteger(), nullable=False),
-        sa.Column('points', sa.Integer(), server_default='0', nullable=False),
-        sa.Column('total_correct', sa.BigInteger(), server_default='0', nullable=False),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.PrimaryKeyConstraint('user_id', 'channel_id'),
-        sa.UniqueConstraint('channel_id', 'user_id', name='unique_channel_user_scores')
-    ) 
+    # op.create_table('polls_user_scores',
+    #     sa.Column('user_id', sa.String(), nullable=False),
+    #     sa.Column('channel_id', sa.BigInteger(), nullable=False),
+    #     sa.Column('points', sa.Integer(), server_default='0', nullable=False),
+    #     sa.Column('total_correct', sa.BigInteger(), server_default='0', nullable=False),
+    #     sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    #     sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    #     sa.PrimaryKeyConstraint('user_id', 'channel_id'),
+    #     sa.UniqueConstraint('channel_id', 'user_id', name='unique_channel_user_scores')
+    # ) 
+    pass

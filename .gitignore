@@ -89,3 +89,10 @@ temp/
 
 # Local scripts
 scripts/*.json
+scripts/*.py
+
+tests/
+
+cloud-sql-proxy-new
+
+cloudbuild.yaml

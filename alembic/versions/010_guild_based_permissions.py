@@ -20,12 +20,12 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Create admin_roles table if not exists
     op.execute("""
-        CREATE TABLE IF NOT EXISTS admin_roles (
+        CREATE TABLE IF NOT EXISTS polls_admin_roles (
             guild_id BIGINT NOT NULL,
             poll_type VARCHAR NOT NULL,
             role_id BIGINT NOT NULL,
             PRIMARY KEY (guild_id, poll_type),
-            FOREIGN KEY (guild_id) REFERENCES guilds(guild_id) ON DELETE CASCADE
+            FOREIGN KEY (guild_id) REFERENCES polls_guilds(guild_id) ON DELETE CASCADE
         )
     """)
     
@@ -35,9 +35,9 @@ def upgrade() -> None:
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'polls' AND column_name = 'poll_type'
+                WHERE table_name = 'polls_polls' AND column_name = 'poll_type'
             ) THEN
-                ALTER TABLE polls ADD COLUMN poll_type VARCHAR;
+                ALTER TABLE polls_polls ADD COLUMN poll_type VARCHAR;
             END IF;
         END
         $$;
@@ -54,10 +54,10 @@ def upgrade() -> None:
                        PARTITION BY guild_id, poll_type, is_active
                        ORDER BY created_at DESC
                    ) as rn
-            FROM polls
+            FROM polls_polls
             WHERE is_active = true
         )
-        UPDATE polls
+        UPDATE polls_polls
         SET is_active = false
         WHERE id IN (
             SELECT id
@@ -75,7 +75,7 @@ def upgrade() -> None:
                 WHERE conname = 'uq_active_poll_per_guild_type'
             ) THEN
                 CREATE UNIQUE INDEX uq_active_poll_per_guild_type
-                ON polls (guild_id, poll_type)
+                ON polls_polls (guild_id, poll_type)
                 WHERE is_active = true;
             END IF;
         END
@@ -88,9 +88,9 @@ def upgrade() -> None:
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM information_schema.columns 
-                WHERE table_name = 'user_scores' AND column_name = 'poll_type'
+                WHERE table_name = 'polls_user_scores' AND column_name = 'poll_type'
             ) THEN
-                ALTER TABLE user_scores ADD COLUMN poll_type VARCHAR;
+                ALTER TABLE polls_user_scores ADD COLUMN poll_type VARCHAR;
             END IF;
         END
         $$;
@@ -98,7 +98,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Remove guild-based changes
-    op.execute("DROP TABLE IF EXISTS admin_roles")
+    op.execute("DROP TABLE IF EXISTS polls_admin_roles")
     op.execute("DROP INDEX IF EXISTS uq_active_poll_per_guild_type")
-    op.execute("ALTER TABLE polls DROP COLUMN IF EXISTS poll_type")
-    op.execute("ALTER TABLE user_scores DROP COLUMN IF EXISTS poll_type") 
+    op.execute("ALTER TABLE polls_polls DROP COLUMN IF EXISTS poll_type")
+    op.execute("ALTER TABLE polls_user_scores DROP COLUMN IF EXISTS poll_type") 

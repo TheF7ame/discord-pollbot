@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Create new tables first
     op.create_table(
-        'channel_leaderboards',
+        'polls_channel_leaderboards',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('channel_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.BigInteger(), nullable=False),
@@ -30,12 +30,12 @@ def upgrade() -> None:
     )
     
     # Add channel_id to polls table
-    op.add_column('polls', sa.Column('channel_id', sa.BigInteger(), nullable=True))
-    op.create_index('ix_polls_channel_id', 'polls', ['channel_id'])
+    op.add_column('polls_polls', sa.Column('channel_id', sa.BigInteger(), nullable=True))
+    op.create_index('ix_polls_polls_channel_id', 'polls_polls', ['channel_id'])
     
     # Create temporary table for user_scores
     op.execute("""
-        CREATE TABLE user_scores_new (
+        CREATE TABLE polls_user_scores_new (
             id SERIAL PRIMARY KEY,
             channel_id BIGINT NOT NULL,
             user_id BIGINT NOT NULL,
@@ -46,28 +46,28 @@ def upgrade() -> None:
     
     # Copy data from old to new table with proper casting
     op.execute("""
-        INSERT INTO user_scores_new (channel_id, user_id, points)
+        INSERT INTO polls_user_scores_new (channel_id, user_id, points)
         SELECT CAST(guild_id AS BIGINT), CAST(user_id AS BIGINT), points 
-        FROM user_scores
+        FROM polls_user_scores
     """)
     
     # Drop old table and rename new one
-    op.drop_table('user_scores')
-    op.execute('ALTER TABLE user_scores_new RENAME TO user_scores')
+    op.drop_table('polls_user_scores')
+    op.execute('ALTER TABLE polls_user_scores_new RENAME TO polls_user_scores')
     
     # Drop old guild_leaderboards table
-    op.drop_table('guild_leaderboards')
+    op.drop_table('polls_guild_leaderboards')
     
     # Update existing records with a default channel_id
-    op.execute("UPDATE polls SET channel_id = 0 WHERE channel_id IS NULL")
+    op.execute("UPDATE polls_polls SET channel_id = 0 WHERE channel_id IS NULL")
     
     # Make columns non-nullable
-    op.alter_column('polls', 'channel_id', nullable=False)
+    op.alter_column('polls_polls', 'channel_id', nullable=False)
 
 def downgrade() -> None:
     # Create temporary table for user_scores
     op.execute("""
-        CREATE TABLE user_scores_new (
+        CREATE TABLE polls_user_scores_new (
             id SERIAL PRIMARY KEY,
             guild_id BIGINT NOT NULL,
             user_id BIGINT NOT NULL,
@@ -78,18 +78,18 @@ def downgrade() -> None:
     
     # Copy data from channel-based to guild-based with proper casting
     op.execute("""
-        INSERT INTO user_scores_new (guild_id, user_id, points)
+        INSERT INTO polls_user_scores_new (guild_id, user_id, points)
         SELECT CAST(channel_id AS BIGINT), CAST(user_id AS BIGINT), points 
-        FROM user_scores
+        FROM polls_user_scores
     """)
     
     # Drop channel-based table and rename new one
-    op.drop_table('user_scores')
-    op.execute('ALTER TABLE user_scores_new RENAME TO user_scores')
+    op.drop_table('polls_user_scores')
+    op.execute('ALTER TABLE polls_user_scores_new RENAME TO polls_user_scores')
     
     # Create guild_leaderboards table
     op.create_table(
-        'guild_leaderboards',
+        'polls_guild_leaderboards',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.BigInteger(), nullable=False),
@@ -100,14 +100,14 @@ def downgrade() -> None:
     
     # Copy data from channel_leaderboards to guild_leaderboards with proper casting
     op.execute("""
-        INSERT INTO guild_leaderboards (guild_id, user_id, points)
+        INSERT INTO polls_guild_leaderboards (guild_id, user_id, points)
         SELECT CAST(channel_id AS BIGINT), CAST(user_id AS BIGINT), points 
-        FROM channel_leaderboards
+        FROM polls_channel_leaderboards
     """)
     
     # Drop channel_leaderboards table
-    op.drop_table('channel_leaderboards')
+    op.drop_table('polls_channel_leaderboards')
     
     # Remove channel_id from polls
-    op.drop_index('ix_polls_channel_id')
-    op.drop_column('polls', 'channel_id') 
+    op.drop_index('ix_polls_polls_channel_id')
+    op.drop_column('polls_polls', 'channel_id') 

@@ -19,37 +19,36 @@ import discord
 from dotenv import load_dotenv
 import sqlalchemy
 from sqlalchemy import create_engine, text
+import logging
+
+logger = logging.getLogger(__name__)
 
 def get_guild_ids_from_db():
     """Fetch all guild IDs from the database using synchronized SQLAlchemy connection."""
-    # Get database URL from environment
-    load_dotenv()
-    database_url = os.getenv('DATABASE_URL')
-    
-    if not database_url:
-        print("Error: DATABASE_URL not found in environment variables")
-        return []
-    
     try:
+        # Get database URL from environment
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            logger.error("DATABASE_URL not found in environment variables")
+            return []
+        
         # Convert asyncpg URL to standard PostgreSQL URL if needed
         if '+asyncpg' in database_url:
-            print("Converting asyncpg URL to standard PostgreSQL URL")
+            logger.info("Converting asyncpg URL to standard PostgreSQL URL")
             database_url = database_url.replace('+asyncpg', '')
-            print(f"Using modified database URL: {database_url}")
         
         # Create database engine with synchronous driver
         engine = create_engine(database_url)
         
         # Query all guild IDs from the guilds table
         with engine.connect() as connection:
-            result = connection.execute(text("SELECT guild_id FROM guilds"))
+            result = connection.execute(text("SELECT guild_id FROM polls_guilds"))
             guild_ids = [str(row[0]) for row in result]
         
-        print(f"Found {len(guild_ids)} guilds in the database")
+        logger.info(f"Found {len(guild_ids)} guilds in the database")
         return guild_ids
-    
     except Exception as e:
-        print(f"Error retrieving guild IDs from database: {e}")
+        logger.error(f"Error retrieving guild IDs from database: {e}")
         return []
 
 async def reset_commands_for_guild(client, tree, guild_id):

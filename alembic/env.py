@@ -27,6 +27,9 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Set the version table name with the 'polls' prefix
+version_table = 'polls_alembic_version'
+
 def get_url():
     """Get the database URL from environment variable."""
     url = os.getenv('DATABASE_URL')
@@ -42,6 +45,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table=version_table,
     )
 
     with context.begin_transaction():
@@ -50,7 +54,8 @@ def run_migrations_offline() -> None:
 def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
-        target_metadata=target_metadata
+        target_metadata=target_metadata,
+        version_table=version_table,
     )
 
     with context.begin_transaction():
@@ -105,7 +110,8 @@ def run_migrations_online() -> None:
             process_revision_directives=process_revision_directives,
             compare_type=True,
             compare_server_default=True,
-            include_schemas=True
+            include_schemas=True,
+            version_table=version_table,
         )
 
         with context.begin_transaction():

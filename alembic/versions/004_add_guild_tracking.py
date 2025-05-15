@@ -19,7 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Create guilds table
-    op.create_table('guilds',
+    op.create_table('polls_guilds',
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
         sa.Column('joined_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('name', sa.String(), nullable=True),
@@ -29,7 +29,7 @@ def upgrade() -> None:
     )
 
     # Create guild_leaderboards table
-    op.create_table('guild_leaderboards',
+    op.create_table('polls_guild_leaderboards',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
@@ -37,43 +37,43 @@ def upgrade() -> None:
         sa.Column('total_correct', sa.Integer(), server_default='0', nullable=False),
         sa.Column('rank', sa.Integer(), nullable=False),
         sa.Column('last_updated', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['guild_id'], ['guilds.guild_id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['guild_id'], ['polls_guilds.guild_id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('guild_id', 'user_id', name='unique_guild_user')
     )
 
     # Drop and recreate user_scores table with guild_id as part of primary key
-    op.drop_table('user_scores')
-    op.create_table('user_scores',
+    op.drop_table('polls_user_scores')
+    op.create_table('polls_user_scores',
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
         sa.Column('points', sa.Integer(), server_default='0', nullable=False),
         sa.Column('total_correct', sa.BigInteger(), server_default='0', nullable=False),
         sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['guild_id'], ['guilds.guild_id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['guild_id'], ['polls_guilds.guild_id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('user_id', 'guild_id')
     )
 
     # Add foreign key and index to polls.guild_id
     op.create_foreign_key(
-        'fk_polls_guild_id', 'polls', 'guilds',
+        'fk_polls_polls_guild_id', 'polls_polls', 'polls_guilds',
         ['guild_id'], ['guild_id'], ondelete='CASCADE'
     )
-    op.create_index('ix_polls_guild_id', 'polls', ['guild_id'])
+    op.create_index('ix_polls_polls_guild_id', 'polls_polls', ['guild_id'])
 
 def downgrade() -> None:
     # Remove foreign key and index from polls
-    op.drop_index('ix_polls_guild_id')
-    op.drop_constraint('fk_polls_guild_id', 'polls', type_='foreignkey')
+    op.drop_index('ix_polls_polls_guild_id')
+    op.drop_constraint('fk_polls_polls_guild_id', 'polls_polls', type_='foreignkey')
 
     # Drop new tables
-    op.drop_table('guild_leaderboards')
-    op.drop_table('user_scores')
-    op.drop_table('guilds')
+    op.drop_table('polls_guild_leaderboards')
+    op.drop_table('polls_user_scores')
+    op.drop_table('polls_guilds')
 
     # Recreate original user_scores table
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('points', sa.Integer(), server_default='0', nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),

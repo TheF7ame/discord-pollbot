@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Drop existing user_scores table
-    op.drop_table('user_scores')
+    op.drop_table('polls_user_scores')
     
     # Create new channel-based user_scores table with additional fields
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('channel_id', sa.BigInteger(), nullable=False),
         sa.Column('points', sa.Integer(), server_default='0', nullable=False),
@@ -35,12 +35,12 @@ def upgrade() -> None:
     
     # Drop existing channel_leaderboards table if it exists
     try:
-        op.drop_table('channel_leaderboards')
+        op.drop_table('polls_channel_leaderboards')
     except:
         pass
     
     # Create new channel_leaderboards table
-    op.create_table('channel_leaderboards',
+    op.create_table('polls_channel_leaderboards',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('channel_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
@@ -54,11 +54,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Drop new tables
-    op.drop_table('channel_leaderboards')
-    op.drop_table('user_scores')
+    op.drop_table('polls_channel_leaderboards')
+    op.drop_table('polls_user_scores')
     
     # Recreate old user_scores table
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('channel_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.BigInteger(), nullable=False),
@@ -68,7 +68,7 @@ def downgrade() -> None:
     )
 
     # Recreate old guild-based tables
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
         sa.Column('poll_type', sa.String(), nullable=False),
@@ -76,12 +76,12 @@ def downgrade() -> None:
         sa.Column('total_correct', sa.BigInteger(), server_default='0', nullable=False),
         sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['guild_id'], ['guilds.guild_id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['guild_id'], ['polls_guilds.guild_id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('user_id', 'guild_id', 'poll_type'),
         sa.UniqueConstraint('guild_id', 'user_id', 'poll_type', name='unique_guild_user_poll_type')
     )
     
-    op.create_table('guild_leaderboards',
+    op.create_table('polls_guild_leaderboards',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
         sa.Column('poll_type', sa.String(), nullable=False),
@@ -90,7 +90,7 @@ def downgrade() -> None:
         sa.Column('total_correct', sa.Integer(), server_default='0', nullable=False),
         sa.Column('rank', sa.Integer(), nullable=False),
         sa.Column('last_updated', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['guild_id'], ['guilds.guild_id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['guild_id'], ['polls_guilds.guild_id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('guild_id', 'poll_type', 'user_id', name='unique_guild_poll_type_user')
     ) 

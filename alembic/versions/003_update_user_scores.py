@@ -18,10 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Drop old table
-    op.drop_table('user_scores')
+    op.drop_table('polls_user_scores')
     
     # Create new table
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('points', sa.Integer(), nullable=False, server_default='0'),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),
@@ -32,4 +32,4 @@ def upgrade() -> None:
     )
 
 def downgrade() -> None:
-    op.drop_table('user_scores') 
+    op.drop_table('polls_user_scores') 

@@ -89,7 +89,7 @@ def get_guild_ids_from_db():
         
         # Query all guild IDs from the guilds table
         with engine.connect() as connection:
-            result = connection.execute(text("SELECT guild_id FROM guilds"))
+            result = connection.execute(text("SELECT guild_id FROM polls_guilds"))
             guild_ids = [str(row[0]) for row in result]
         
         logger.info(f"Found {len(guild_ids)} guilds in the database")

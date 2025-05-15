@@ -17,13 +17,13 @@ depends_on = None
 
 def upgrade() -> None:
     # Drop existing tables
-    op.drop_table('user_scores')
-    op.drop_table('user_poll_selections')
-    op.drop_table('poll_options')
-    op.drop_table('polls')
+    op.drop_table('polls_user_scores')
+    op.drop_table('polls_user_poll_selections')
+    op.drop_table('polls_poll_options')
+    op.drop_table('polls_polls')
     
     # Recreate tables with BIGINT
-    op.create_table('polls',
+    op.create_table('polls_polls',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('question', sa.String(), nullable=False),
         sa.Column('creator_id', sa.BigInteger(), nullable=False),
@@ -37,26 +37,26 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id')
     )
     
-    op.create_table('poll_options',
+    op.create_table('polls_poll_options',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('poll_id', sa.BigInteger(), nullable=False),
         sa.Column('text', sa.String(), nullable=False),
-        sa.ForeignKeyConstraint(['poll_id'], ['polls.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['poll_id'], ['polls_polls.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     
-    op.create_table('user_poll_selections',
+    op.create_table('polls_user_poll_selections',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('poll_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('selections', postgresql.JSON(astext_type=sa.Text()), nullable=False),
         sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['poll_id'], ['polls.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['poll_id'], ['polls_polls.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     
-    op.create_table('user_scores',
+    op.create_table('polls_user_scores',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('guild_id', sa.BigInteger(), nullable=False),

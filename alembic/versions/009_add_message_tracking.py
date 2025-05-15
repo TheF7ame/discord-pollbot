@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Create poll_messages table
-    op.create_table('poll_messages',
+    op.create_table('polls_poll_messages',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('poll_id', sa.BigInteger(), nullable=False),
         sa.Column('message_id', sa.BigInteger(), nullable=False),
@@ -26,28 +26,28 @@ def upgrade() -> None:
         sa.Column('message_type', sa.String(), nullable=False),
         sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('is_active', sa.Boolean(), server_default='true', nullable=False),
-        sa.ForeignKeyConstraint(['poll_id'], ['polls.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['poll_id'], ['polls_polls.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     
     # Create ui_states table
-    op.create_table('ui_states',
+    op.create_table('polls_ui_states',
         sa.Column('id', sa.BigInteger(), nullable=False),
         sa.Column('poll_id', sa.BigInteger(), nullable=False),
         sa.Column('user_id', sa.String(), nullable=False),
         sa.Column('state_data', postgresql.JSON(astext_type=sa.Text()), nullable=False),
         sa.Column('last_interaction', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
         sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.ForeignKeyConstraint(['poll_id'], ['polls.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['poll_id'], ['polls_polls.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     
     # Add indexes
-    op.create_index('idx_poll_messages_poll_id', 'poll_messages', ['poll_id'])
-    op.create_index('idx_poll_messages_channel_id', 'poll_messages', ['channel_id'])
-    op.create_index('idx_ui_states_poll_id', 'ui_states', ['poll_id'])
-    op.create_index('idx_ui_states_user_id', 'ui_states', ['user_id'])
+    op.create_index('idx_poll_messages_poll_id', 'polls_poll_messages', ['poll_id'])
+    op.create_index('idx_poll_messages_channel_id', 'polls_poll_messages', ['channel_id'])
+    op.create_index('idx_ui_states_poll_id', 'polls_ui_states', ['poll_id'])
+    op.create_index('idx_ui_states_user_id', 'polls_ui_states', ['user_id'])
 
 def downgrade() -> None:
-    op.drop_table('ui_states')
-    op.drop_table('poll_messages') 
+    op.drop_table('polls_ui_states')
+    op.drop_table('polls_poll_messages') 

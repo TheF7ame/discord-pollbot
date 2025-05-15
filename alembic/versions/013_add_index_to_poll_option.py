@@ -18,12 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add index column to the poll_options table
-    op.add_column('poll_options', sa.Column('index', sa.Integer(), nullable=False, server_default='0'))
+    op.add_column('polls_poll_options', sa.Column('index', sa.Integer(), nullable=False, server_default='0'))
     
     # Create an index on the column for faster lookups
-    op.create_index('ix_poll_options_index', 'poll_options', ['index'])
+    op.create_index('ix_polls_poll_options_index', 'polls_poll_options', ['index'])
 
 def downgrade() -> None:
     # Drop the index and column in reverse order
-    op.drop_index('ix_poll_options_index')
-    op.drop_column('poll_options', 'index') 
+    op.drop_index('ix_polls_poll_options_index')
+    op.drop_column('polls_poll_options', 'index') 
